@@ -1,0 +1,30 @@
+{
+    "video": "video/output_2lane_1.avi",
+    "output": "output",
+    "display": false,
+    "tracking": [
+        {
+            "name": "right_lane",
+            "lane": "[(1078, 412), (675, 987), (1376, 1049), (1339, 432)]",
+            "line": "[(1009, 728), (1443, 813)]",
+            "desc": "come from bankok"
+        },
+        {
+            "name": "left_lane",
+            "lane": "[(1038, 383), (791, 1046), (283, 728), (862, 365)]",
+            "line": "[(837, 465), (1089, 497)]",
+            "desc": "come from Chaingmai"
+        }
+    ],
+    "scale": 25,
+    "density": [
+        {
+            "name": "zone 1",
+            "lane": "[(1078, 412), (675, 987), (1376, 1049), (1339, 432)]"
+        },
+        {
+            "name": "zone 2",
+            "lane": "[(1038, 383), (791, 1046), (283, 728), (862, 365)]"
+        }
+    ]
+}
