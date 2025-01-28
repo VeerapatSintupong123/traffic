@@ -6,6 +6,7 @@ import ast
 from threading import Thread, Event
 from queue import Queue
 
+import copy
 import cv2 as cv
 import numpy as np
 from ultralytics import YOLO
@@ -13,8 +14,8 @@ from ultralytics import YOLO
 from sort import Sort
 from utils import (
     results_to_detection, is_point_on_lane, side_of_line,
-    find_closest_class, str_to_bool, extract_background,
-    segment_zone, save_crop_image, color_density
+    find_closest_class, save_crop_image,
+    extract_background, segment_zone, color_density
 )
 
 MODEL_NAME = "yolo11n.engine"
@@ -40,12 +41,16 @@ class Pipeline:
         self.dict_class = {1: 'bicycle', 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck'}
 
         self.input_frame = Queue(maxsize= 50)
+        self.heatmap_frame = Queue(maxsize= 50)
         self.density_frame = Queue(maxsize= 50)
         self.output_frame = Queue(maxsize= 50)
         self.stop_threads = Event()
 
         self.frame_count = 0
         self.last_processed_frame_info = {"frame": None, "frame_index": 0.0}
+
+        self.accum_image = None
+        self.first_frame = None
 
         # input video
         self.video = cv.VideoCapture(self.config["video"])
@@ -60,6 +65,7 @@ class Pipeline:
         # ouput directory
         self.output = self.config["output"]
         os.makedirs(f"{self.output}/density", exist_ok= True)
+        os.makedirs(f"{self.output}/heatmap", exist_ok= True)
         for zone_name in self.lane_data.keys():
             for name in self.dict_class.values():
                 os.makedirs(f"{self.output}/{zone_name}/{name}", exist_ok= True)
@@ -112,7 +118,9 @@ class Pipeline:
                         self.input_frame.put(frame, timeout= 1)
                     if not self.density_frame.full():
                         self.density_frame.put(frame, timeout= 1)
-                        self.frame_count += 1
+                    if not self.heatmap_frame.full():
+                        self.heatmap_frame.put(frame, timeout= 1)
+                    self.frame_count += 1
                 except Queue.full:
                     continue
 
@@ -205,21 +213,38 @@ class Pipeline:
                 if not self.output_frame.full():
                     self.output_frame.put((frame, tracker_objects))
 
-    def display_results(self):
+    def heatmap_generator(self):
+        background_segment = cv.bgsegm.createBackgroundSubtractorMOG()
+
         while not self.stop_threads.is_set():
-            if not self.output_frame.empty():
-                frame, tracker_objects = self.output_frame.get()
+            try:
+                if not self.heatmap_frame.empty():
+                    frame = self.heatmap_frame.get()
 
-                for obj in tracker_objects:
-                    x1, y1, x2, y2, obj_id = map(int, obj)
-                    cv.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    if self.frame_count == 1:
+                        self.first_frame = copy.deepcopy(frame)
+                        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                        height, width = gray.shape[:2]
+                        self.accum_image = np.zeros((height, width), np.uint8)
+                    else:
+                        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                        mask = background_segment.apply(gray)
 
-                cv.imshow("Tracking Results", frame)
+                        thresh = 2
+                        maxValue = 2
+                        ret, th1 = cv.threshold(mask, thresh, maxValue, cv.THRESH_BINARY)
+                        self.accum_image = cv.add(self.accum_image, th1)
 
-                if cv.waitKey(1) & 0xFF == ord('q'):
-                    self.stop_threads.set()
-                    break
-        cv.destroyAllWindows()
+                    color_image = cv.applyColorMap(self.accum_image, cv.COLORMAP_HOT)
+                    result = cv.addWeighted(self.first_frame, 0.7, color_image, 0.7, 0)
+
+                    if self.frame_count % 5 == 0:
+                        output_path = f"{self.output}/heatmap/frame_{self.frame_count}.jpg"
+                        if not cv.imwrite(output_path, result):
+                            logging.error(f"Failed to save heatmap frame: {output_path}")
+
+            except Exception as e:
+                logging.error(f"Error in heatmap generation: {e}")
 
     def run(self):
         logging.basicConfig(level=logging.INFO)
@@ -239,11 +264,9 @@ class Pipeline:
         threads = [
             Thread(target= self.video_to_frame),
             Thread(target= self.tracking),
-            Thread(target= self.histogram_density)
+            Thread(target= self.histogram_density),
+            Thread(target= self.heatmap_generator)
         ]
-
-        if str_to_bool(self.config.get("display", "False")):
-            threads.append(Thread(target=self.display_results))
 
         start = time.time()
         

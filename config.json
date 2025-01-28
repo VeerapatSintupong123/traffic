@@ -1,7 +1,6 @@
 {
     "video": "video/output_2lane_1.avi",
     "output": "output",
-    "display": false,
     "tracking": [
         {
             "name": "right_lane",
