@@ -15,7 +15,8 @@ from sort import Sort
 from utils import (
     results_to_detection, is_point_on_lane, side_of_line,
     find_closest_class, save_crop_image,
-    extract_background, segment_zone, color_density
+    extract_background, segment_zone, color_density,
+    save_csv
 )
 
 MODEL_NAME = "yolo11n.engine"
@@ -49,9 +50,6 @@ class Pipeline:
         self.frame_count = 0
         self.last_processed_frame_info = {"frame": None, "frame_index": 0.0}
 
-        self.accum_image = None
-        self.first_frame = None
-
         # input video
         self.video = cv.VideoCapture(self.config["video"])
         if not os.path.exists(self.config["video"]):
@@ -62,10 +60,22 @@ class Pipeline:
         self.density_zone = self._parse_zones(self.config["density"])
         self.lane_data = self._initial_lane_data()
 
+        # heatmap
+        self.accum_image = None
+        self.first_frame = None
+
+        # density
+        self.densities = []
+
+        # tracking
+        self.prev_tracking_info = {}
+        self.history_tracking = []
+
         # ouput directory
         self.output = self.config["output"]
         os.makedirs(f"{self.output}/density", exist_ok= True)
         os.makedirs(f"{self.output}/heatmap", exist_ok= True)
+
         for zone_name in self.lane_data.keys():
             for name in self.dict_class.values():
                 os.makedirs(f"{self.output}/{zone_name}/{name}", exist_ok= True)
@@ -129,47 +139,6 @@ class Pipeline:
             self.stop_threads.set()
             cap.release()
             print("Video processing completed")
-    
-    def histogram_density(self):
-        while not self.stop_threads.is_set():
-            if not self.density_frame.empty():
-                frame = self.density_frame.get()
-
-                scale_factor = self.config["scale"] / 100
-                new_width = int(frame.shape[1] * scale_factor)
-                new_height = int(frame.shape[0] * scale_factor)
-                frame = cv.resize(frame, (new_width, new_height), interpolation=cv.INTER_AREA)
-
-                base_frame = cv.imread(f"{self.output}/background.jpg")
-                base_frame = cv.resize(base_frame, (new_width, new_height), interpolation=cv.INTER_AREA)
-                diff_frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-                display_frame = cv.cvtColor(diff_frame, cv.COLOR_GRAY2BGR)
-
-                for parking in self.density_zone:
-                    zone_name = parking["name"]
-                    
-                    zone = [(int(item[0] * scale_factor), int(item[1] * scale_factor)) for item in parking["lane"]]
-
-                    zone_array = np.array(zone, dtype=np.int32)
-
-                    segment_base = segment_zone(base_frame, zone)
-                    segment_diff = segment_zone(diff_frame, zone)
-
-                    hist_base = cv.calcHist([segment_base], [0], None, [256], [1, 255]).flatten()
-                    hist_diff = cv.calcHist([segment_diff], [0], None, [256], [1, 255]).flatten()
-
-                    result = np.maximum(hist_base - hist_diff, 0)
-                    density = np.sum(result) / np.sum(hist_base) if np.sum(hist_base) > 0 else 0
-
-                    cv.fillPoly(display_frame, [zone_array], color_density(density))
-
-                    zone_center = tuple(np.mean(zone_array, axis=0).astype(int))
-                    cv.putText(display_frame, zone_name, zone_center, cv.FONT_HERSHEY_SIMPLEX,
-                            0.6, (255, 255, 255), 2, cv.LINE_AA)
-                    
-                if self.frame_count % 5 == 0:
-                    cv.imwrite(f"{self.output}/density/frame_{self.frame_count}.jpg", display_frame)
 
     def tracking(self):
         while not self.stop_threads.is_set():
@@ -184,10 +153,36 @@ class Pipeline:
                     for item in response
                 }
 
+                save_dict = {}
+                save_dict["frame"] = self.frame_count
+                save_dict["detections"] = []
                 tracker_objects = self.tracker.update(np.array(detections))
+
                 for obj in tracker_objects:
                     x1, y1, x2, y2, obj_id = map(int, obj)
                     centroid = ((x1 + x2) // 2, (y1 + y2) // 2)
+
+                    vehicle = {}
+                    vehicle["id"] = obj_id
+                    vehicle["bbox"] = [x1, y1, x2, y2]
+                    vehicle["speed"] = 0
+                    vehicle["angle"] = 0
+
+                    # speed, direction and angle calculation
+                    if obj_id in self.prev_tracking_info:
+                        prev_centroid = self.prev_tracking_info[obj_id]
+                        speed = np.linalg.norm(np.array(centroid) - np.array(prev_centroid))  
+                        vehicle["speed"] = speed
+
+                        direction = (centroid[0] - prev_centroid[0], centroid[1] - prev_centroid[1])
+                        angle_radians = np.arctan2(direction[1], direction[0])
+                        angle_degrees = np.degrees(angle_radians) % 360
+                        vehicle["angle"] = angle_degrees
+
+                    save_dict["detections"].append(vehicle)
+
+                    # update previous tracking info
+                    self.prev_tracking_info[obj_id] = centroid
 
                     for tracking_info in self.tracking_zone:
                         try:
@@ -209,9 +204,56 @@ class Pipeline:
                         except Exception as e:
                             print(f"Error processing tracking info: {e}")
                             continue
+                
+                self.history_tracking.append(save_dict)
 
                 if not self.output_frame.full():
                     self.output_frame.put((frame, tracker_objects))
+
+    def histogram_density(self):
+        while not self.stop_threads.is_set():
+            if not self.density_frame.empty():
+                frame = self.density_frame.get()
+
+                scale_factor = self.config["scale"] / 100
+                new_width = int(frame.shape[1] * scale_factor)
+                new_height = int(frame.shape[0] * scale_factor)
+                frame = cv.resize(frame, (new_width, new_height), interpolation=cv.INTER_AREA)
+
+                base_frame = cv.imread(f"{self.output}/background.jpg")
+                base_frame = cv.resize(base_frame, (new_width, new_height), interpolation=cv.INTER_AREA)
+                diff_frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+                display_frame = cv.cvtColor(diff_frame, cv.COLOR_GRAY2BGR)
+
+                save_dict = {}
+                save_dict["frame"] = self.frame_count
+                for parking in self.density_zone:
+                    zone_name = parking["name"]
+                    
+                    zone = [(int(item[0] * scale_factor), int(item[1] * scale_factor)) for item in parking["lane"]]
+
+                    zone_array = np.array(zone, dtype=np.int32)
+
+                    segment_base = segment_zone(base_frame, zone)
+                    segment_diff = segment_zone(diff_frame, zone)
+
+                    hist_base = cv.calcHist([segment_base], [0], None, [256], [1, 255]).flatten()
+                    hist_diff = cv.calcHist([segment_diff], [0], None, [256], [1, 255]).flatten()
+
+                    result = np.maximum(hist_base - hist_diff, 0)
+                    density = np.sum(result) / np.sum(hist_base) if np.sum(hist_base) > 0 else 0
+                    save_dict[zone_name] = density
+
+                    cv.fillPoly(display_frame, [zone_array], color_density(density))
+
+                    zone_center = tuple(np.mean(zone_array, axis=0).astype(int))
+                    cv.putText(display_frame, zone_name, zone_center, cv.FONT_HERSHEY_SIMPLEX,
+                            0.6, (255, 255, 255), 2, cv.LINE_AA)
+                
+                self.densities.append(save_dict)
+                if self.frame_count % 5 == 0:
+                    cv.imwrite(f"{self.output}/density/frame_{self.frame_count}.jpg", display_frame)
 
     def heatmap_generator(self):
         background_segment = cv.bgsegm.createBackgroundSubtractorMOG()
@@ -282,3 +324,11 @@ class Pipeline:
         end = time.time()
         print(f"Last processed frame index: {int(self.last_processed_frame_info['frame_index'])}")
         print(f"Total Execution Time: {end - start:.2f} seconds")
+
+        # save density histogram
+        save_csv(f"{self.output}/density.csv", self.densities)
+
+        # save history tracking
+        file_path = f"{self.output}/tracking.json"
+        with open(file_path, "w") as json_file:
+            json.dump({"history": self.history_tracking}, json_file, indent= 4)

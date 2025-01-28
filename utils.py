@@ -6,6 +6,7 @@ import cv2 as cv
 from moviepy.editor import VideoFileClip
 from sklearn import decomposition
 import os
+import csv
 
 def is_point_on_lane(x, y, lane):
     area = Polygon(lane)
@@ -150,6 +151,13 @@ def save_crop_image(frame, save_path, class_id, x1, y1, x2, y2):
     resized_frame = cv.resize(cropped_frame, (224, 224), interpolation=cv.INTER_AREA)
     cv.imwrite(f"{save_path}/{class_id}_{len_dir + 1}.jpg", resized_frame)
     
+def save_csv(ouput, data):
+    columns = data[0].keys()
+    with open(ouput, mode="w", newline='') as file:
+        writer = csv.DictWriter(file, fieldnames= columns)
+        writer.writeheader()
+        writer.writerows(data)
+
 def cosine_similarity(vec1, vec2):
     vec1 = np.array(vec1)
     vec2 = np.array(vec2)
