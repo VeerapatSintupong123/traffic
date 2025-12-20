@@ -239,6 +239,12 @@ def anomaly_detect(video_path, output_folder, dict_map):
         output_folder (str): Folder to save results.
         dict_map (list): List of dictionaries with object details ({id, frame, angle, bbox, path}).
     """
+    ckpt_path = "resnet_checkpoint.pth"
+    feats_path = "resnet_features.json"
+    if not os.path.exists(ckpt_path) or not os.path.exists(feats_path):
+        print("[anomaly_detect] Skipping: missing resnet checkpoint or features.")
+        return
+
     anomaly_labels = ["tuktuk", "ambulance"]
     anomaly_images = {item: [] for item in anomaly_labels}
 
