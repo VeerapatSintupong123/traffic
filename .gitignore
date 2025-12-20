@@ -1,11 +1,12 @@
 video
 image
-yolo11n.engine
-yolo11n.onnx
-yolo11n.pt
+yolo*
 output
 __pycache__
 preprocess
 light-effectss
 resnet_checkpoint.pth
 resnet_features.json
+*.log
+*.csv
+.env

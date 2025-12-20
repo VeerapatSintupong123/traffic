@@ -14,47 +14,40 @@ The implementation is optimized for real-time performance on Jetson Nano using m
 ## Installation
 
 ### Prerequisites
-Ensure you have Python 3.11.11 installed. The project requires CUDA-compatible GPU for optimal performance.
+- Python 3.11.11
+- CUDA-capable GPU and matching NVIDIA drivers
 
-### Step 1: Clone the Repository
+### 1) Download YOLOv7 weights
+Grab the official `yolov7.pt` (or your preferred checkpoint) and place it at the project root:
 ```sh
-git clone https://github.com/your-repository.git
-cd your-repository
+curl -L -o yolov7.pt https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7.pt
 ```
 
-### Step 2: Install Dependencies
-Create a virtual environment (optional but recommended):
+### 2) Clone YOLOv7
+Fetch the YOLOv7 repo next to this project (already present in this workspace as `yolov7/`):
+```sh
+git clone https://github.com/WongKinYiu/yolov7.git
+```
+
+### 3) Install dependencies
+Create and activate a virtual environment (recommended):
 ```sh
 python -m venv venv
-source venv/bin/activate  # On Windows use: venv\Scripts\activate
+venv\Scripts\activate  # On macOS/Linux: source venv/bin/activate
 ```
 
-Install required packages:
+Install project and YOLOv7 requirements:
 ```sh
 pip install -r requirements.txt
+pip install -r yolov7/requirements.txt
 ```
 
-### Step 3: Export Yolo to TensorRT
-Ensure you have the YOLO model engine file placed in the project directory:
+### 4) Create or adjust a config
+Use the provided sample at [config/config_test.json](config/config_test.json) and update paths/zones as needed for your video.
+
+### 5) Run the YOLOv7 pipeline
 ```sh
-yolo export model=yolo11n.pt format=engine 
-```
-
-### Step 4: Run the Pipeline
-Prepare a configuration JSON file (`config.json`) with required parameters:
-```json
-{
-  "video": "input_video.mp4",
-  "tracking": [ { "name": "lane1", "lane": "[...]", "line": "[...]" } ],
-  "density": [ { "name": "zone1", "lane": "[...]" } ],
-  "output": "output_directory",
-  "scale": 100
-}
-```
-
-Execute the script:
-```sh
-python main.py --config config.json
+python main.py tracking --config config/config_test.json
 ```
 
 ## Output Files
