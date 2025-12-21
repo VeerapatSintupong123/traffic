@@ -15,7 +15,7 @@ from PIL import Image, ImageFont, ImageDraw
 import numpy as np
 from shapely.geometry import Point, Polygon
 from shapely import contains
-from moviepy.editor import VideoFileClip
+from moviepy.video.io.VideoFileClip import VideoFileClip
 from sklearn import decomposition
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -1,6 +1,6 @@
-from moviepy.editor import VideoFileClip
 import cv2 as cv
 import numpy as np
+from moviepy.video.io.VideoFileClip import VideoFileClip
 
 class RoadSegmenter:
     def __init__(self, video_path: str, time_in_seconds: int):

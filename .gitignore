@@ -10,3 +10,5 @@ resnet_features.json
 *.log
 *.csv
 .env
+models/
+.vscode/

@@ -32,7 +32,7 @@ from utils import (
 )
 
 # MODEL_NAME = "yolo11n.engine"
-MODEL_NAME = "yolov7.pt"
+MODEL_NAME = "models/yolov7.pt"
 
 class PipelineV7:
     def __init__(self, config_path, tracking_algorithm: str = "sort"):

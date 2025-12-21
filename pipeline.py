@@ -24,7 +24,7 @@ from utils import (
     save_csv, save_result, anomaly_detect
 )
 
-MODEL_NAME = "yolo11n.engine"
+MODEL_NAME = "models/yolo11n.pt"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Pipeline:
@@ -317,12 +317,12 @@ class Pipeline:
     def run(self):
         logging.basicConfig(level=logging.INFO)
 
-        logging.info("Extract Background")
-        extract_background(
-            self.config["video"], 
-            self.config["scale"], 
-            self.config["output"]
-        )
+        # logging.info("Extract Background")
+        # extract_background(
+        #     self.config["video"], 
+        #     self.config["scale"], 
+        #     self.config["output"]
+        # )
 
         # setup model for cleaning
         model_resnet = models.resnet50(weights=ResNet50_Weights.DEFAULT).to(device)
@@ -342,8 +342,8 @@ class Pipeline:
         threads = [
             Thread(target= self.video_to_frame),
             Thread(target= self.tracking),
-            Thread(target= self.histogram_density),
-            Thread(target= self.heatmap_generator)
+            # Thread(target= self.histogram_density),
+            # Thread(target= self.heatmap_generator)
         ]
 
         start = time.time()
