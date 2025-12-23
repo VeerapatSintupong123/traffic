@@ -12,3 +12,4 @@ resnet_features.json
 .env
 models/
 .vscode/
+yolov7/

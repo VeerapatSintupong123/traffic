@@ -1,5 +1,5 @@
 {
-    "video": "./video/south_1-out.avi",
+    "video": "./video/south_video.avi",
     "output": "./output/output_south_1",
     "tracking": [
         {

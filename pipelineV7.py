@@ -407,12 +407,12 @@ class PipelineV7:
     def run(self):
         logging.basicConfig(level=logging.INFO)
 
-        logging.info("Extract Background")
-        extract_background(
-            self.config["video"], 
-            self.config["scale"], 
-            self.config["output"]
-        )
+        # logging.info("Extract Background")
+        # extract_background(
+        #     self.config["video"], 
+        #     self.config["scale"], 
+        #     self.config["output"]
+        # )
 
         # setup model for cleaning
         model_resnet = models.resnet50(weights=ResNet50_Weights.DEFAULT).to(self.device)
@@ -432,8 +432,8 @@ class PipelineV7:
         threads = [
             Thread(target= self.video_to_frame),
             Thread(target= self.tracking),
-            Thread(target= self.histogram_density),
-            Thread(target= self.heatmap_generator)
+            # Thread(target= self.histogram_density),
+            # Thread(target= self.heatmap_generator)
         ]
 
         start = time.time()
