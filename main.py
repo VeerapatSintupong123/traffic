@@ -1,6 +1,6 @@
 import argparse
-from pipeline import Pipeline
-from pipelineV7 import PipelineV7
+from pipeline.pipelineV11 import Pipeline
+from pipeline.pipelineV7 import PipelineV7
 from segmentor import RoadSegmenter
 
 def main():
