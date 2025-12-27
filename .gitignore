@@ -13,3 +13,4 @@ resnet_features.json
 models/
 .vscode/
 yolov7/
+runs/
