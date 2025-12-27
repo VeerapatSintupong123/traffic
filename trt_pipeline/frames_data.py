@@ -36,10 +36,11 @@ def letterbox(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleu
     return im, r, (dw, dh)
 
 class VideoFrameDataset(Dataset):
-    def __init__(self, video_path, device):
+    def __init__(self, video_path, skip, device):
         self.frames = []
         self.device = device
         self.video_path = video_path
+        self.skip = skip
 
         logger.info(f"Opening video: {video_path}")
         cap = cv.VideoCapture(self.video_path)
@@ -49,11 +50,14 @@ class VideoFrameDataset(Dataset):
         total = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
         logger.info(f"Total frames reported: {total}")
 
-        for _ in tqdm(range(total), desc="Reading video frames"):
+        for i, _ in enumerate(tqdm(range(total), desc="Reading video frames")):
             ret, frame = cap.read()
             if not ret:
                 logger.warning("Frame read failed before expected end")
                 break
+
+            if self.skip != 0 and i % self.skip == 0:
+                continue  # skip frames
             self.frames.append(frame)
 
         cap.release()
@@ -72,6 +76,8 @@ class VideoFrameDataset(Dataset):
             auto=False,
         )
 
+        img_lb_bgr = cv.cvtColor(img_lb, cv.COLOR_RGB2BGR)
+
         img_chw = img_lb.transpose(2, 0, 1)
         img_chw = np.expand_dims(img_chw, axis=0)
         img_chw = np.ascontiguousarray(img_chw, dtype=np.float32)
@@ -79,7 +85,7 @@ class VideoFrameDataset(Dataset):
         tensor = torch.from_numpy(img_chw) / 255.0
         tensor = tensor.squeeze(0)
 
-        return img_bgr, tensor, ratio, dwdh
+        return img_lb_bgr, tensor, ratio, dwdh
     
 # frames_dataset = VideoFrameDataset("video\south_1-out.avi", device)
 # dataloader = DataLoader(frames_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)

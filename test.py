@@ -1,7 +1,6 @@
 import torch
 import argparse
-from pipeline import Pipeline
-from pipeline.pipelineV7 import PipelineV7
+from pipelineV7 import PipelineV7
 from segmentor import RoadSegmenter
 
 import onnx_graphsurgeon
