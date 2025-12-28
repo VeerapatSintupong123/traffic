@@ -57,8 +57,8 @@ class VideoFrameDataset(Dataset):
                 logger.warning("Frame read failed before expected end")
                 break
 
-            if self.skip != 0 and i % self.skip == 0:
-                continue  # skip frames
+            if self.skip > 1 and i % self.skip != 0:
+                continue
             self.frames.append(frame)
 
         cap.release()
@@ -77,8 +77,6 @@ class VideoFrameDataset(Dataset):
             new_shape=(640, 640),
             auto=False,
         )
-
-        # img_lb_bgr = cv.cvtColor(img_lb, cv.COLOR_RGB2BGR)
 
         img_chw = img_lb.transpose(2, 0, 1)
         img_chw = np.expand_dims(img_chw, axis=0)

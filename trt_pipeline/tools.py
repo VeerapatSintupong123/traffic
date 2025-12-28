@@ -4,8 +4,9 @@ import gc
 import json
 import os
 import ast
-from pathlib import Path
+import cv2 as cv
 from shapely.geometry import Polygon
+from tqdm import tqdm
 
 def get_logger(name: str, level=logging.INFO):
     logger = logging.getLogger(name)
@@ -90,7 +91,7 @@ def side_of_line(point, line_start, line_end):
     x2, y2 = line_end
     return (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1)
 
-def lane_data_to_json(lane_data, path):
+def save_lane_data(lane_data, path):
     out = {}
     for lane_name, lane_info in lane_data.items():
         out[lane_name] = {
@@ -103,3 +104,11 @@ def lane_data_to_json(lane_data, path):
 
     with open(path, "w") as f:
         json.dump(out, f, indent=2)
+
+def save_performance_data(config, preprocess_times, infer_times, tracking_times):
+    with open(os.path.join(config['output'], "performance.json"), "w") as f:
+        json.dump({
+            "preprocess_time": preprocess_times,
+            "inference_time": infer_times,
+            "tracking_time": tracking_times
+        }, f, indent=2)
