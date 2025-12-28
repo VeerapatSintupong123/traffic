@@ -1,6 +1,6 @@
 {
     "video": "./video/south_video.avi",
-    "output": "./output/output_south_1",
+    "output": "./output/output_south",
     "tracking": [
         {
             "name": "left_lane",
@@ -15,6 +15,7 @@
             "desc": "come from bankok"
         }
     ],
+    "skip": 2,
     "scale": 25,
     "density": [
         {

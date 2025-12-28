@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import tensorrt as trt
-from utils import get_logger
+from tools import get_logger
 
 INPUT_NAME = "images"
 TRT_LOGGER = trt.Logger(trt.Logger.INFO)

@@ -3,7 +3,8 @@ import cv2 as cv
 import numpy as np
 import torch
 from tqdm import tqdm
-from utils import get_logger
+from tools import get_logger
+import time
 
 logger = get_logger("VideoFrameDataset")
 
@@ -67,6 +68,7 @@ class VideoFrameDataset(Dataset):
         return len(self.frames)
 
     def __getitem__(self, idx):
+        start_time = time.perf_counter()
         img_bgr = self.frames[idx]
         img_rgb = cv.cvtColor(img_bgr, cv.COLOR_BGR2RGB)
 
@@ -76,7 +78,7 @@ class VideoFrameDataset(Dataset):
             auto=False,
         )
 
-        img_lb_bgr = cv.cvtColor(img_lb, cv.COLOR_RGB2BGR)
+        # img_lb_bgr = cv.cvtColor(img_lb, cv.COLOR_RGB2BGR)
 
         img_chw = img_lb.transpose(2, 0, 1)
         img_chw = np.expand_dims(img_chw, axis=0)
@@ -84,8 +86,10 @@ class VideoFrameDataset(Dataset):
 
         tensor = torch.from_numpy(img_chw) / 255.0
         tensor = tensor.squeeze(0)
+        end_time = time.perf_counter()
+        process_time = end_time - start_time
 
-        return img_lb_bgr, tensor, ratio, dwdh
+        return process_time, img_bgr, tensor, ratio, dwdh
     
 # frames_dataset = VideoFrameDataset("video\south_1-out.avi", device)
 # dataloader = DataLoader(frames_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
