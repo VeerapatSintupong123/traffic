@@ -14,3 +14,4 @@ models/
 .vscode/
 yolov7/
 runs/
+*/data/*
