@@ -1,6 +1,6 @@
 {
     "video": "./video/south_video.avi",
-    "output": "./output/output_south",
+    "output": "./output/south_skip_2_5",
     "tracking": [
         {
             "name": "left_lane",

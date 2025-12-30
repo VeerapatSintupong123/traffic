@@ -105,9 +105,10 @@ def save_lane_data(lane_data, path):
     with open(path, "w") as f:
         json.dump(out, f, indent=2)
 
-def save_performance_data(config, preprocess_times, infer_times, tracking_times):
+def save_performance_data(config, total, preprocess_times, infer_times, tracking_times):
     with open(os.path.join(config['output'], "performance.json"), "w") as f:
         json.dump({
+            "total_time": total,
             "preprocess_time": preprocess_times,
             "inference_time": infer_times,
             "tracking_time": tracking_times

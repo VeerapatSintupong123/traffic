@@ -72,6 +72,7 @@ class TrafficTracker:
         return process_time, imgs, torch.stack(tensors, 0), ratios, dwdhs
 
     def run(self):
+        total_start = time.perf_counter()
         for idx, (proc_times, imgs, input_tensor, ratios, dwdhs) in enumerate(tqdm(self.dataloader)):
             ratio = ratios[0]
             dw, dh = dwdhs[0]
@@ -146,7 +147,7 @@ class TrafficTracker:
                                 self.dict_class[class_id],
                             )
                             os.makedirs(save_dir, exist_ok=True)
-
+                            
                             cv.imwrite(
                                 os.path.join(
                                     save_dir,
@@ -155,12 +156,16 @@ class TrafficTracker:
                                 frame[y1c:y2c, x1c:x2c],
                             )
 
+        total_time = time.perf_counter() - total_start
+        self.logger.info(f"Total processing time: {total_time:.2f} seconds")
+
         cleanup()
         self.logger.info("Resources cleaned up.")
 
         save_lane_data(self.lane_data, os.path.join(self.config["output"], "lane_data.json"))
         save_performance_data(
             self.config,
+            total_time,
             self.preprocess_times,
             self.infer_times,
             self.tracking_times,
