@@ -1,15 +1,12 @@
 import torch
 from trt_model import TRTModel
-from frames_data import VideoFrameDataset
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from video_stream import VideoStream, AsyncImageSaver, letterbox
 import numpy as np
 import os
 import time
-import json
 from tools import (
     get_logger, cleanup, initial_config, initial_lane_data, to_original_coords,
-    parse_zones, side_of_line, save_lane_data, save_performance_data
+    parse_zones, side_of_line, save_lane_data
 )
 from shapely.geometry import Point
 from shapely import contains
@@ -23,11 +20,11 @@ class TrafficTracker:
         engine_path,
         tracker,
         dict_class,
-        save_crop: bool,
-        batch_size: int = 1,
+        save_crop
     ):
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.logger = get_logger("TrafficTracker")
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.logger.info(f"Device: {self.device}")
 
         self.config = initial_config(config_path)
         self.save_crop = save_crop
@@ -41,78 +38,84 @@ class TrafficTracker:
             device=self.device,
         )
 
-        self.dataset = VideoFrameDataset(
-            video_path=self.config["video"],
-            skip=self.skip,
-            device=self.device,
-        )
-
-        self.dataloader = DataLoader(
-            self.dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=0,
-            pin_memory=True,
-            collate_fn=self.collate_fn,
-        )
-
         self.tracker = tracker
         self.dict_class = dict_class
 
         self.tracking_zone = parse_zones(self.config["tracking"])
         self.lane_data = initial_lane_data(self.tracking_zone, self.dict_class)
 
-        self.preprocess_times = []
-        self.infer_times = []
-        self.tracking_times = []
-
-    @staticmethod
-    def collate_fn(batch):
-        process_time, imgs, tensors, ratios, dwdhs = zip(*batch)
-        return process_time, imgs, torch.stack(tensors, 0), ratios, dwdhs
+        self.image_saver = AsyncImageSaver()
+        self.save_dir = {}
+        for lane_name, _ in self.lane_data.items():
+            for cls in list(dict_class.values()):
+                save_dir = os.path.join(
+                    self.config["output"],
+                    lane_name,
+                    cls
+                )
+                os.makedirs(save_dir, exist_ok=True)
+                self.save_dir[(lane_name, cls)] = save_dir
 
     def run(self):
+        cv.setNumThreads(0)
+        cv.ocl.setUseOpenCL(False)
+        max_frames = int(25 * 3600)
+
+        stream = VideoStream(
+            video_path=self.config["video"],
+            skip=self.frame_stride,
+            queue_size=2,
+        )
+
         total_start = time.perf_counter()
-        for idx, (proc_times, imgs, input_tensor, ratios, dwdhs) in enumerate(tqdm(self.dataloader)):
-            ratio = ratios[0]
-            dw, dh = dwdhs[0]
-            frame_idx = idx * self.frame_stride
 
-            self.preprocess_times.append(proc_times[0])
+        while True:
+            item = stream.read()
+            if item is None:
+                break
 
-            input_tensor = input_tensor.to(self.device)
+            frame_idx, frame_bgr = item
+            if frame_idx % 10 == 0:
+                print(f"\rframe: {frame_idx}", end="", flush=True)
 
-            # Inference
-            infer_time, outputs = self.model.infer(input_tensor)
-            self.infer_times.append(infer_time)
+            if frame_idx > max_frames:
+                break
 
-            num = int(outputs["num_dets"][0].item())
+            # ------------------ preprocess ------------------
+            img_rgb = cv.cvtColor(frame_bgr, cv.COLOR_BGR2RGB)
+            img_lb, ratio, (dw, dh) = letterbox(
+                img_rgb, new_shape=(640, 640), auto=False
+            )
+
+            img_chw = img_lb.transpose(2, 0, 1)
+            img_chw = np.ascontiguousarray(img_chw, dtype=np.float32) / 255.0
+            input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
+
+            # ------------------ inference -------------------
+            _, outputs = self.model.infer(input_tensor)
+            num = int(outputs["num_dets"][0])
             boxes = outputs["det_boxes"][0][:num].cpu().numpy()
             scores = outputs["det_scores"][0][:num].cpu().numpy()
             classes = outputs["det_classes"][0][:num].cpu().numpy()
-
             dets = np.concatenate([boxes, scores[:, None], classes[:, None]], axis=-1)
 
-            # Tracking
-            frame = imgs[0].copy()
-            start = time.perf_counter()
-            results = self.tracker.update(dets, frame)
-            self.tracking_times.append(time.perf_counter() - start)
+            # ------------------ tracking --------------------
+            results = self.tracker.update(dets, frame_bgr)
 
-            h, w = frame.shape[:2]
+            # ------------------ post logic ------------------
+            h, w = frame_bgr.shape[:2]
 
             for x1, y1, x2, y2, track_id, _, class_id, _ in results:
                 class_id = int(class_id)
                 if class_id not in self.dict_class:
                     continue
 
-                # Convert coords
-                cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                 cxo, cyo = to_original_coords(cx, cy, dw, dh, ratio)
+
                 x1o, y1o = to_original_coords(x1, y1, dw, dh, ratio)
                 x2o, y2o = to_original_coords(x2, y2, dw, dh, ratio)
 
-                # Clamp + cast
                 x1c = int(max(0, min(w, x1o)))
                 y1c = int(max(0, min(h, y1o)))
                 x2c = int(max(0, min(w, x2o)))
@@ -141,36 +144,21 @@ class TrafficTracker:
                         )
 
                         if self.save_crop:
-                            save_dir = os.path.join(
-                                self.config["output"],
-                                lane_name,
-                                self.dict_class[class_id],
+                            crop = frame_bgr[y1c:y2c, x1c:x2c]
+                            save_path = os.path.join(
+                                self.save_dir[(lane_name, self.dict_class[class_id])],
+                                f"frame_{frame_idx}_id_{track_id}.jpg"
                             )
-                            os.makedirs(save_dir, exist_ok=True)
-                            
-                            cv.imwrite(
-                                os.path.join(
-                                    save_dir,
-                                    f"frame_{frame_idx}_id_{track_id}.jpg",
-                                ),
-                                frame[y1c:y2c, x1c:x2c],
-                            )
+                            self.image_saver.save(save_path, crop)
 
         total_time = time.perf_counter() - total_start
-        self.logger.info(f"Total processing time: {total_time:.2f} seconds")
+        self.logger.info(f"Total time: {total_time:.2f}s")
 
         cleanup()
+        self.image_saver.stop()
         self.logger.info("Resources cleaned up.")
 
         save_lane_data(self.lane_data, os.path.join(self.config["output"], "lane_data.json"))
-        save_performance_data(
-            self.config,
-            total_time,
-            self.preprocess_times,
-            self.infer_times,
-            self.tracking_times,
-        )
-
         self.logger.info("Outputs saved successfully.")
 
 if __name__ == "__main__":
@@ -179,19 +167,11 @@ if __name__ == "__main__":
     dict_class = {1: 'bicycle', 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck'}
 
     tracker = ByteTrack(
-        det_thresh=0.01,
-        max_age=30,
-        max_obs=100,
-        min_hits=3,
-        iou_threshold=0.3,
-        per_class=False,
-        nr_classes=80,
-        asso_func="iou",
-        is_obb=False,
-        min_conf=0.1,
-        track_thresh=0.6,
-        match_thresh=0.8,
-        frame_rate=25
+        min_conf = 0.3,
+        track_thresh = 0.5,
+        match_thresh = 0.7,
+        track_buffer = 25,
+        frame_rate = 25,
     )
 
     traffic_tracker = TrafficTracker(
@@ -200,6 +180,5 @@ if __name__ == "__main__":
         tracker=tracker,
         dict_class=dict_class,
         save_crop=True,
-        batch_size=1
     )
     traffic_tracker.run()

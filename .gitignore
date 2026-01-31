@@ -15,3 +15,4 @@ models/
 yolov7/
 runs/
 */data/*
+result_test_skip.zip
