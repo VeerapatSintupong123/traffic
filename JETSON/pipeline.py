@@ -5,7 +5,6 @@ import numpy as np
 import torch
 import cv2 as cv
 from shapely.geometry import Point
-from shapely import contains
 
 from sort import Sort
 from trt_pipeline.trt_model import TRTModel
@@ -133,7 +132,7 @@ class Pipeline:
 
                     if (
                         lane["polygon"] is not None
-                        and contains(lane["polygon"], Point(cxo, cyo))
+                        and lane["polygon"].contains(Point(cxo, cyo))
                         and side_of_line((cxo, cyo), lane["line"][0], lane["line"][1]) < 0
                     ):
                         lane["cross_ids"].add(int(track_id))
