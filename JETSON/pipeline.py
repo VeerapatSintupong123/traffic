@@ -1,471 +1,173 @@
 import os
-import sys
-from pathlib import Path
-import json
 import time
 import logging
-import ast
-from threading import Thread, Event
-from queue import Queue
-
-import copy
-import cv2 as cv
 import numpy as np
 import torch
-import torch.nn as nn
-from torchvision import models, transforms
-from torchvision.models import ResNet50_Weights
+import cv2 as cv
+from shapely.geometry import Point
+from shapely import contains
 
-from clean import process_images
 from sort import Sort
-from utils import (
-    is_point_on_lane, side_of_line,
-    find_closest_class, location_support, save_crop_image,
-    segment_zone, color_density,
-    save_csv, save_result
+from trt_pipeline.trt_model import TRTModel
+from trt_pipeline.video_stream import VideoStream, AsyncImageSaver, letterbox
+from trt_pipeline.tools import (
+    get_logger, cleanup, initial_config, initial_lane_data, to_original_coords,
+    parse_zones, side_of_line, save_lane_data
 )
 
-MODEL_NAME = "models/yolov7.pt"
 
-class PipelineV7:
-    def __init__(self, config_path, tracking_algorithm: str = "sort"):
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-            
-        try:
-            with open(config_path, 'r') as f:
-                self.config = json.load(f)
-        except json.JSONDecodeError:
-            raise ValueError(f"Invalid JSON format in config file: {config_path}")
+class Pipeline:
+    def __init__(self, config_path: str, engine_path: str, save_crop: bool = False):
+        self.logger = get_logger("JetsonPipeline")
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.logger.info(f"Device: {self.device}")
 
-        required_keys = ["video", "tracking", "density", "output", "scale"]
-        missing_keys = [key for key in required_keys if key not in self.config]
-        if missing_keys:
-            raise KeyError(f"Missing required configuration keys: {missing_keys}")
-        
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.config = initial_config(config_path)
+        self.save_crop = save_crop
 
-        # self.model = YOLO(MODEL_NAME, task= "detect")
-        self.load_model()
-        
-        try:
-            self.tracker = Sort()
-        except ValueError as e:
-            raise ValueError(e)
-        
-        self.dict_class = {1: 'bicycle', 2: 'car', 3: 'motorcycle', 5: 'bus', 7: 'truck'}
+        self.skip = int(self.config.get("skip", 0))
+        self.frame_stride = max(1, self.skip)
 
-        self.input_frame = Queue(maxsize= 50)
-        self.heatmap_frame = Queue(maxsize= 50)
-        self.density_frame = Queue(maxsize= 50)
-        self.output_frame = Queue(maxsize= 50)
-        self.stop_threads = Event()
+        self.model = TRTModel(
+            engine_path=engine_path,
+            input_shape=(1, 3, 640, 640),
+            device=self.device,
+        )
 
-        self.frame_count = 0
-        self.last_processed_frame_info = {"frame": None, "frame_index": 0.0}
+        self.tracker = Sort()
+        self.dict_class = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+        self.target_classes = set(self.dict_class.keys())
 
-        # input video
-        self.video = cv.VideoCapture(self.config["video"])
-        if not os.path.exists(self.config["video"]):
-            raise FileNotFoundError(f"Video file not found: {self.config['video']}")
+        self.tracking_zone = parse_zones(self.config["tracking"])
+        self.lane_data = initial_lane_data(self.tracking_zone, self.dict_class)
 
-        # configuration
-        self.tracking_zone = self._parse_zones(self.config["tracking"])
-        self.density_zone = self._parse_zones(self.config["density"])
-        self.lane_data = self._initial_lane_data()
+        self.image_saver = AsyncImageSaver()
+        self.save_dir = {}
+        for lane_name, _ in self.lane_data.items():
+            for cls in list(self.dict_class.values()):
+                save_dir = os.path.join(self.config["output"], lane_name, cls)
+                os.makedirs(save_dir, exist_ok=True)
+                self.save_dir[(lane_name, cls)] = save_dir
 
-        # heatmap
-        self.accum_image = None
-        self.first_frame = None
-        self.previous_mask = None 
-
-        # density
-        self.densities = []
-
-        # tracking
-        self.prev_tracking_info = {}
-        self.history_tracking = []
-
-        # ouput directory
-        self.output = self.config["output"]
-        os.makedirs(f"{self.output}/density", exist_ok= True)
-        os.makedirs(f"{self.output}/heatmap", exist_ok= True)
-
-        for zone_name in self.lane_data.keys():
-            for name in self.dict_class.values():
-                os.makedirs(f"{self.output}/{zone_name}/{name}", exist_ok= True)
-
-    def _parse_zones(self, zones):
-        parsed_zones = []
-        for zone in zones:
-            parsed_zone = zone.copy()
-            for key in ['lane', 'line']:
-                if isinstance(parsed_zone.get(key), str):
-                    try:
-                        parsed_zone[key] = ast.literal_eval(parsed_zone[key])
-                    except (ValueError, SyntaxError):
-                        print(f"Warning: Could not parse {key} coordinates for {parsed_zone.get('name', 'Unknown zone')}")
-                        continue
-            parsed_zones.append(parsed_zone)
-        return parsed_zones
-
-    def _initial_lane_data(self):
-        return {
-            lane["name"]: {
-                "cross_ids": set(),
-                "cross_map": [],
-                "dict_count": {key: 0 for key in self.dict_class.keys()},
-            }
-            for lane in self.tracking_zone
-        }
-
-    def load_model(self):
-        original_utils = sys.modules.get("utils")
-        y7_dir = Path(__file__).parent / "yolov7"
-        if y7_dir.exists():
-            y7_str = str(y7_dir)
-            if y7_str in sys.path:
-                sys.path.remove(y7_str)
-            sys.path.insert(0, y7_str)
-            sys.modules.pop("utils", None)  # avoid shadowing
-
-            from models.yolo import Model
-            from models.common import Conv
-            from utils.datasets import letterbox
-            from utils.general import non_max_suppression, scale_coords
-            from torch.serialization import add_safe_globals
-            add_safe_globals([Model, nn.Sequential])
-
-            self._y7_letterbox = letterbox
-            self._y7_nms = non_max_suppression
-            self._y7_scale_coords = scale_coords
-            conv_cls = Conv
-
-        ckpt = torch.load(MODEL_NAME, map_location=self.device, weights_only=False)
-        self.model = ckpt['ema' if ckpt.get('ema') else 'model'].float().fuse().eval()
-
-        for m in self.model.modules():
-            if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU]:
-                m.inplace = True
-            elif type(m) is nn.Upsample:
-                m.recompute_scale_factor = None
-            elif conv_cls and isinstance(m, conv_cls):
-                m._non_persistent_buffers_set = set()
-
-        self.model.eval()
-
-        # Restore project utils after loading
-        if original_utils is not None:
-            sys.modules["utils"] = original_utils
-
-    def warm_up_model(self):
-        dummy = torch.zeros(1, 3, 640, 640, device=self.device)
-        with torch.no_grad():
-            _ = self.model(dummy)
-
-    def video_to_frame(self):
-        cap = self.video
-        fps = cap.get(cv.CAP_PROP_FPS)
-
-        try:
-            while cap.isOpened() and not self.stop_threads.is_set():
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                current_frame_index = int(cap.get(cv.CAP_PROP_POS_FRAMES))
-                self.last_processed_frame_info = {
-                    "frame": frame,
-                    "frame_index": current_frame_index
-                }
-
-                try:
-                    if not self.input_frame.full():
-                        self.input_frame.put(frame, timeout= 1)
-                    if not self.density_frame.full():
-                        self.density_frame.put(frame, timeout= 1)
-                    if not self.heatmap_frame.full():
-                        self.heatmap_frame.put(frame, timeout= 1)
-                    self.frame_count += 1
-                except Queue.full:
-                    continue
-
-                time.sleep(1.0 / fps)
-        finally:
-            self.stop_threads.set()
-            cap.release()
-            print("Video processing completed")
-
-    def tracking(self):
-        target_classes = set(self.dict_class.keys())  # {1,2,3,5,7}
-        while not self.stop_threads.is_set():
-            if self.input_frame.empty():
-                continue
-
-            img0 = self.input_frame.get()  # BGR frame (H, W, 3)
-            # Preprocess
-            img = self._y7_letterbox(img0.copy(), 640, stride=32, auto=True)[0]
-            img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR->RGB, HWC->CHW
-            img = np.ascontiguousarray(img)
-            img = torch.from_numpy(img).to(self.device).float() / 255.0
-            if img.ndimension() == 3:
-                img = img.unsqueeze(0)
-
-            # Inference
-            with torch.no_grad():
-                pred = self.model(img)[0]
-            pred = self._y7_nms(pred, conf_thres=0.5, iou_thres=0.45, classes=None, agnostic=False)[0]
-
-            detections_list = []
-            if pred is not None and len(pred):
-                # Rescale boxes to original image
-                pred[:, :4] = self._y7_scale_coords(img.shape[2:], pred[:, :4], img0.shape).round()
-                for *xyxy, conf, cls in pred.tolist():
-                    cls_id = int(cls)
-                    if cls_id in target_classes:
-                        x1, y1, x2, y2 = xyxy
-                        detections_list.append([x1, y1, x2, y2, conf, cls_id])
-
-            # Build per-frame outputs
-            response = detections_list
-            boxes_only = [[d[0], d[1], d[2], d[3]] for d in response]
-            map_class_id = {
-                ((int((d[0]+d[2])/2)), int((d[1]+d[3])/2)): d[5] for d in response
-            }
-
-            save_dict = {"frame": self.frame_count, "detections": []}
-
-            # Call tracker: BoXMOT trackers expect image + [x1,y1,x2,y2,conf,cls],
-            # local SORT expects just boxes
-            if isinstance(self.tracker, Sort):
-                tracker_objects = self.tracker.update(np.array(boxes_only))
-            else:
-                tracker_objects = self.tracker.update(np.array(response) if response else np.empty((0, 6)), img0)
-
-            for obj in tracker_objects:
-                # BoXMOT trackers return [x1,y1,x2,y2,id] or [x1,y1,x2,y2,id, ...]
-                x1, y1, x2, y2, obj_id = map(int, obj[:5])
-                centroid = ((x1 + x2) // 2, (y1 + y2) // 2)
-
-                vehicle = {"id": obj_id, "bbox": [x1, y1, x2, y2], "speed": 0, "angle": 0}
-                if obj_id in self.prev_tracking_info:
-                    prev = self.prev_tracking_info[obj_id]
-                    speed = np.linalg.norm(np.array(centroid) - np.array(prev))
-                    vehicle["speed"] = float(speed)
-                    direction = (centroid[0] - prev[0], centroid[1] - prev[1])
-                    angle = (np.degrees(np.arctan2(direction[1], direction[0])) % 360)
-                    vehicle["angle"] = float(angle)
-
-                save_dict["detections"].append(vehicle)
-                self.prev_tracking_info[obj_id] = centroid
-
-                for tracking_info in self.tracking_zone:
-                    try:
-                        lane = tracking_info["lane"]
-                        line = tracking_info["line"]
-                        lane_name = tracking_info["name"]
-                        lane_info = self.lane_data[lane_name]
-
-                        if is_point_on_lane(centroid[0], centroid[1], lane):
-                            curr_side = side_of_line(centroid, line[0], line[1])
-                            same_location = location_support(lane_info["cross_map"], [x1, y1, x2, y2], vehicle["angle"])
-
-                            if obj_id not in lane_info["cross_ids"] and curr_side < 0 and not same_location:
-                                class_id = find_closest_class(centroid, map_class_id)
-                                lane_info["cross_ids"].add(obj_id)
-                                lane_info["dict_count"][class_id] += 1
-
-                                save_path = f"{self.output}/{lane_name}/{self.dict_class[class_id]}"
-                                save_crop_image(img0, save_path, self.dict_class[class_id], x1, y1, x2, y2, obj_id)
-
-                                lane_info["cross_map"].append({
-                                    "id": obj_id,
-                                    "frame": self.frame_count,
-                                    "angle": vehicle["angle"],
-                                    "bbox": [x1, y1, x2, y2],
-                                    "path": f"{save_path}/{self.dict_class[class_id]}_{obj_id}.jpg"
-                                })
-                    except Exception as e:
-                        print(f"Error processing tracking info: {e}")
-                        continue
-
-            self.history_tracking.append(save_dict)
-            if not self.output_frame.full():
-                self.output_frame.put((img0, tracker_objects))
-
-    def histogram_density(self):
-        while not self.stop_threads.is_set():
-            if not self.density_frame.empty():
-                frame = self.density_frame.get()
-
-                scale_factor = self.config["scale"] / 100
-                new_width = int(frame.shape[1] * scale_factor)
-                new_height = int(frame.shape[0] * scale_factor)
-                frame = cv.resize(frame, (new_width, new_height), interpolation=cv.INTER_AREA)
-
-                base_frame = cv.imread(f"{self.output}/background.jpg")
-                base_frame = cv.resize(base_frame, (new_width, new_height), interpolation=cv.INTER_AREA)
-                diff_frame = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-                display_frame = cv.cvtColor(diff_frame, cv.COLOR_GRAY2BGR)
-
-                save_dict = {}
-                save_dict["frame"] = self.frame_count
-                for parking in self.density_zone:
-                    zone_name = parking["name"]
-                    
-                    zone = [(int(item[0] * scale_factor), int(item[1] * scale_factor)) for item in parking["lane"]]
-
-                    zone_array = np.array(zone, dtype=np.int32)
-
-                    segment_base = segment_zone(base_frame, zone)
-                    segment_diff = segment_zone(diff_frame, zone)
-
-                    hist_base = cv.calcHist([segment_base], [0], None, [256], [1, 255]).flatten()
-                    hist_diff = cv.calcHist([segment_diff], [0], None, [256], [1, 255]).flatten()
-
-                    result = np.maximum(hist_base - hist_diff, 0)
-                    density = np.sum(result) / np.sum(hist_base) if np.sum(hist_base) > 0 else 0
-                    save_dict[zone_name] = density
-
-                    cv.fillPoly(display_frame, [zone_array], color_density(density))
-
-                    zone_center = tuple(np.mean(zone_array, axis=0).astype(int))
-                    cv.putText(display_frame, zone_name, zone_center, cv.FONT_HERSHEY_SIMPLEX,
-                            0.6, (255, 255, 255), 2, cv.LINE_AA)
-                
-                self.densities.append(save_dict)
-                if self.frame_count % 5 == 0:
-                    cv.imwrite(f"{self.output}/density/frame_{self.frame_count}.jpg", display_frame)
-
-    def heatmap_generator(self):
-        background_segment = cv.bgsegm.createBackgroundSubtractorMOG()
-        frame_reset_count = 25
-        
-        while not self.stop_threads.is_set():
-            try:
-                if not self.heatmap_frame.empty():
-                    frame = self.heatmap_frame.get()
-
-                    # Reset accumulator image every 25 frames
-                    if self.frame_count % frame_reset_count == 1:
-                        self.first_frame = copy.deepcopy(frame)
-                        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-                        height, width = gray.shape[:2]
-                        self.accum_image = np.zeros((height, width), np.uint8)
-                        self.previous_mask = None
-                    else:
-                        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-                        current_mask = background_segment.apply(gray)
-
-                        # Only process if the current mask is different from the previous one
-                        if self.previous_mask is None or not np.array_equal(current_mask, self.previous_mask):
-                            thresh = 2
-                            maxValue = 2
-                            ret, th1 = cv.threshold(current_mask, thresh, maxValue, cv.THRESH_BINARY)
-                            self.accum_image = cv.add(self.accum_image, th1)
-                            self.previous_mask = current_mask.copy()
-
-                    color_image = cv.applyColorMap(self.accum_image, cv.COLORMAP_HOT)
-                    result = cv.addWeighted(self.first_frame, 0.7, color_image, 0.7, 0)
-
-                    if self.frame_count % frame_reset_count == 0:
-                        output_path = f"{self.output}/heatmap/frame_{self.frame_count}.jpg"
-                        if not cv.imwrite(output_path, result):
-                            logging.error(f"Failed to save heatmap frame: {output_path}")
-
-            except Exception as e:
-                logging.error(f"Error in heatmap generation: {e}")
+    def _closest_class_id(self, centroid, dets):
+        if dets.size == 0:
+            return None
+        centers = np.stack([
+            (dets[:, 0] + dets[:, 2]) / 2,
+            (dets[:, 1] + dets[:, 3]) / 2
+        ], axis=1)
+        dists = np.linalg.norm(centers - np.array(centroid), axis=1)
+        idx = int(np.argmin(dists))
+        return int(dets[idx, 5])
 
     def run(self):
-        logging.basicConfig(level=logging.INFO)
+        cv.setNumThreads(0)
+        cv.ocl.setUseOpenCL(False)
+        max_frames = int(25 * 3600)
 
-        # logging.info("Extract Background")
-        # extract_background(
-        #     self.config["video"], 
-        #     self.config["scale"], 
-        #     self.config["output"]
-        # )
+        stream = VideoStream(
+            video_path=self.config["video"],
+            skip=self.frame_stride,
+            queue_size=2,
+        )
 
-        # setup model for cleaning
-        model_resnet = models.resnet50(weights=ResNet50_Weights.DEFAULT).to(self.device)
-        model_resnet.eval()
+        total_start = time.perf_counter()
+        processed_frames = 0
 
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        while True:
+            item = stream.read()
+            if item is None:
+                break
 
-        logging.info("Tracking...")
-        time.sleep(0.5)
+            frame_idx, frame_bgr = item
+            processed_frames = frame_idx
+            if frame_idx % 10 == 0:
+                print(f"\rframe: {frame_idx}", end="", flush=True)
 
-        self.warm_up_model()
+            if frame_idx > max_frames:
+                break
 
-        threads = [
-            Thread(target= self.video_to_frame),
-            Thread(target= self.tracking),
-            # Thread(target= self.histogram_density),
-            # Thread(target= self.heatmap_generator)
-        ]
+            img_rgb = cv.cvtColor(frame_bgr, cv.COLOR_BGR2RGB)
+            img_lb, ratio, (dw, dh) = letterbox(img_rgb, new_shape=(640, 640), auto=False)
 
-        start = time.time()
-        
-        try:
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join()
-        except KeyboardInterrupt:
-            print("\nStopping threads...")
-            self.stop_threads.set()
+            img_chw = img_lb.transpose(2, 0, 1)
+            img_chw = np.ascontiguousarray(img_chw, dtype=np.float32) / 255.0
+            input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
 
-        end = time.time()
-        print(f"Last processed frame index: {int(self.last_processed_frame_info['frame_index'])}")
-        print(f"Total Execution Time: {end - start:.2f} seconds")
+            _, outputs = self.model.infer(input_tensor)
+            num = int(outputs["num_dets"][0])
+            boxes = outputs["det_boxes"][0][:num].cpu().numpy()
+            scores = outputs["det_scores"][0][:num].cpu().numpy()
+            classes = outputs["det_classes"][0][:num].cpu().numpy()
+            dets = np.concatenate([boxes, scores[:, None], classes[:, None]], axis=-1)
 
-        # save density histogram
-        save_csv(f"{self.output}/density.csv", self.densities)
+            if dets.size:
+                dets = dets[np.isin(dets[:, 5].astype(int), list(self.target_classes))]
 
-        # save history tracking
-        file_path = f"{self.output}/tracking.json"
-        with open(file_path, "w") as json_file:
-            json.dump({"history": self.history_tracking}, json_file, indent= 4)
+            boxes_only = dets[:, :4] if dets.size else np.empty((0, 4))
+            tracker_objects = self.tracker.update(boxes_only)
 
-        logging.info("Cleaning...")
-        time.sleep(0.5)
+            h, w = frame_bgr.shape[:2]
 
-        # crossing map
-        temp = {}
-        for tracking_info in self.tracking_zone:
-            lane_name = tracking_info["name"]
-            lane_info = self.lane_data[lane_name]
-            temp[lane_name] = process_images(
-                lane_info["cross_map"],
-                model_resnet, 
-                transform
-            )
+            for x1, y1, x2, y2, track_id in tracker_objects:
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                class_id = self._closest_class_id((cx, cy), dets)
+                if class_id is None or class_id not in self.target_classes:
+                    continue
 
-        logging.info("Post-process")
-        time.sleep(0.5)
+                cxo, cyo = to_original_coords(cx, cy, dw, dh, ratio)
+                x1o, y1o = to_original_coords(x1, y1, dw, dh, ratio)
+                x2o, y2o = to_original_coords(x2, y2, dw, dh, ratio)
 
-        try:
-            from utils import anomaly_detect
-        except Exception:
-            anomaly_detect = None
+                x1c = int(max(0, min(w, x1o)))
+                y1c = int(max(0, min(h, y1o)))
+                x2c = int(max(0, min(w, x2o)))
+                y2c = int(max(0, min(h, y2o)))
 
-        if anomaly_detect is not None:
-            anomaly_detect(
-                video_path=self.config["video"],
-                output_folder=self.output,
-                dict_map=temp
-            )
-        else:
-            logging.info("Skipping anomaly detection (optional dependency not installed)")
+                if x2c <= x1c or y2c <= y1c:
+                    continue
 
-        # saving crossing map
-        file_path = f"{self.output}/crossing.json"
-        with open(file_path, "w") as json_file:
-            json.dump(temp, json_file, indent= 2)
+                for lane_name, lane in self.lane_data.items():
+                    if int(track_id) in lane["cross_ids"]:
+                        continue
 
-        save_result(self.output, self.config["video"], temp)
+                    if (
+                        lane["polygon"] is not None
+                        and contains(lane["polygon"], Point(cxo, cyo))
+                        and side_of_line((cxo, cyo), lane["line"][0], lane["line"][1]) < 0
+                    ):
+                        lane["cross_ids"].add(int(track_id))
+                        lane["count_cls"][class_id] += 1
+                        lane["cross_obj"].append(
+                            {
+                                "id": int(track_id),
+                                "frame": frame_idx,
+                                "class_id": int(class_id),
+                                "bbox": (x1c, y1c, x2c, y2c),
+                            }
+                        )
+
+                        if self.save_crop:
+                            crop = frame_bgr[y1c:y2c, x1c:x2c]
+                            save_path = os.path.join(
+                                self.save_dir[(lane_name, self.dict_class[int(class_id)])],
+                                f"frame_{frame_idx}_id_{int(track_id)}.jpg"
+                            )
+                            self.image_saver.save(save_path, crop)
+
+        total_time = time.perf_counter() - total_start
+        fps = (processed_frames / total_time) if total_time > 0 else 0.0
+        self.logger.info(f"Total time: {total_time:.2f}s | FPS: {fps:.2f}")
+
+        inference_path = os.path.join(self.config["output"], "inference.txt")
+        with open(inference_path, "w") as f:
+            f.write(f"Total frames: {processed_frames}\n")
+            f.write(f"Total time (s): {total_time:.2f}\n")
+            f.write(f"Average FPS: {fps:.2f}\n")
+
+        cleanup()
+        self.image_saver.stop()
+        self.logger.info("Resources cleaned up.")
+
+        save_lane_data(self.lane_data, os.path.join(self.config["output"], "lane_data.json"))
+        self.logger.info("Outputs saved successfully.")
