@@ -1,6 +1,6 @@
 {
-    "video": "./video/south_video.avi",
-    "output": "./output/south_skip_2_5",
+    "video": "C:/Users/Auto/Downloads/south_evening.avi",
+    "output": "./output/south_evening",
     "tracking": [
         {
             "name": "left_lane",
@@ -15,7 +15,7 @@
             "desc": "come from bankok"
         }
     ],
-    "skip": 2,
+    "skip": 0,
     "scale": 25,
     "density": [
         {
