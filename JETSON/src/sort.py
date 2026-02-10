@@ -1,25 +1,5 @@
 from __future__ import print_function
-
-import os
 import numpy as np
-try:
-    import matplotlib
-    matplotlib.use('TkAgg')
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as patches
-except Exception:
-    matplotlib = None
-    plt = None
-    patches = None
-
-try:
-    from skimage import io
-except Exception:
-    io = None
-
-import glob
-import time
-import argparse
 from filterpy.kalman import KalmanFilter
 
 np.random.seed(0)

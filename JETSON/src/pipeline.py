@@ -37,7 +37,7 @@ class Pipeline:
             device=self.device,
         )
 
-        self.tracker = Sort()
+        self.tracker = self.initial_tracker(self.config)
         self.dict_class = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
         self.target_classes = set(self.dict_class.keys())
 
@@ -51,6 +51,22 @@ class Pipeline:
                 save_dir = os.path.join(self.config["output"], lane_name, cls)
                 os.makedirs(save_dir, exist_ok=True)
                 self.save_dir[(lane_name, cls)] = save_dir
+
+    def initial_tracker(self, config):
+        if config is None:
+            return Sort()
+        else:
+            if hasattr(config, "tracker"):
+                if config["tracker"].get("type", "sort").lower() == "ocsort":
+                    return Sort(max_age=config["tracker"].get("max_age", 30),
+                                min_hits=config["tracker"].get("min_hits", 3),
+                                iou_threshold=config["tracker"].get("iou_threshold", 0.3),
+                                use_occlusion=True)
+                elif config["tracker"].get("type", "sort").lower() == "bytetrack":
+                    return Sort(max_age=config["tracker"].get("max_age", 30),
+                                min_hits=config["tracker"].get("min_hits", 3),
+                                iou_threshold=config["tracker"].get("iou_threshold", 0.3),
+                                use_byte=True)
 
     def _closest_class_id(self, centroid, dets):
         if dets.size == 0:
