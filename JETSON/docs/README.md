@@ -18,3 +18,9 @@ This folder contains documentation for the JETSON deployment package.
 
 ### For Testing
 → See [TESTING_GUIDE.md](TESTING_GUIDE.md)
+
+
+### Run Command
+```
+python3 .\src\run_pipeline.py --config ../../config/config_south_1.json --engine ../../models/yolov7-tiny.engine
+```
