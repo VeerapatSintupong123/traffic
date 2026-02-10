@@ -8,7 +8,7 @@ import cv2 as cv
 from shapely.geometry import Point
 
 # Add parent directory to path to find trt_pipeline
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from sort import Sort
 from trt_pipeline.trt_model import TRTModel
