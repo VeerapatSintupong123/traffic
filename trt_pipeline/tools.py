@@ -1,12 +1,10 @@
-import logging
-import torch
 import gc
 import json
 import os
 import ast
-import cv2 as cv
+import logging
+import torch
 from shapely.geometry import Polygon
-from tqdm import tqdm
 
 def get_logger(name: str, level=logging.INFO):
     logger = logging.getLogger(name)

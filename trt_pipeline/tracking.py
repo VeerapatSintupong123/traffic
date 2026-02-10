@@ -6,12 +6,13 @@ import os
 import time
 from tools import (
     get_logger, cleanup, initial_config, initial_lane_data, to_original_coords,
-    parse_zones, side_of_line, save_lane_data
+    parse_zones, side_of_line, save_lane_data,
 )
 from shapely.geometry import Point
 from shapely import contains
 from boxmot.trackers import ByteTrack
 import cv2 as cv
+from payload import Payload
 
 class TrafficTracker:
     def __init__(
@@ -43,6 +44,9 @@ class TrafficTracker:
 
         self.tracking_zone = parse_zones(self.config["tracking"])
         self.lane_data = initial_lane_data(self.tracking_zone, self.dict_class)
+
+        # API
+        self.payload = Payload(intersection_id="INT-001", camera_id="CAM-01")
 
         self.image_saver = AsyncImageSaver()
         self.save_dir = {}
