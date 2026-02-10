@@ -10,7 +10,8 @@ from shapely.geometry import Point
 # Add parent directory to path to find trt_pipeline
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from sort import Sort
+from algorithm.sort import Sort
+from algorithm.ocsort import OcSort
 from trt_pipeline.trt_model import TRTModel
 from trt_pipeline.video_stream import VideoStream, AsyncImageSaver, letterbox
 from trt_pipeline.tools import (
@@ -70,12 +71,28 @@ class Pipeline:
         
         self.logger.info(f"Initializing tracker: {tracker_type}")
         
-        # Create Sort instance with configured parameters
-        # Note: ByteTrack and OCSort require extended Sort implementation
+        if tracker_type == "ocsort":
+            det_thresh = tracker_config.get("det_thresh", 0.6)
+            delta_t = tracker_config.get("delta_t", 3)
+            inertia = tracker_config.get("inertia", 0.2)
+            use_byte = tracker_config.get("use_byte", False)
+            min_conf = tracker_config.get("min_conf", 0.1)
+            self._ocsort_min_conf = float(min_conf)
+            return OcSort(
+                det_thresh=float(det_thresh),
+                max_age=int(max_age),
+                min_hits=int(min_hits),
+                iou_threshold=float(iou_threshold),
+                delta_t=int(delta_t),
+                inertia=float(inertia),
+                use_byte=bool(use_byte)
+            )
+
+        self._ocsort_min_conf = None
         return Sort(
-            max_age=max_age,
-            min_hits=min_hits,
-            iou_threshold=iou_threshold
+            max_age=int(max_age),
+            min_hits=int(min_hits),
+            iou_threshold=float(iou_threshold)
         )
 
     def _closest_class_id(self, centroid, dets):
@@ -134,7 +151,12 @@ class Pipeline:
                 dets = dets[np.isin(dets[:, 5].astype(int), list(self.target_classes))]
 
             boxes_only = dets[:, :4] if dets.size else np.empty((0, 4))
-            tracker_objects = self.tracker.update(boxes_only)
+            if isinstance(self.tracker, OcSort):
+                tracker_input = dets[:, :5] if dets.size else np.empty((0, 5))
+                min_conf = 0.1 if self._ocsort_min_conf is None else self._ocsort_min_conf
+                tracker_objects = self.tracker.update(tracker_input, min_conf=min_conf)
+            else:
+                tracker_objects = self.tracker.update(boxes_only)
 
             h, w = frame_bgr.shape[:2]
 
