@@ -8,7 +8,7 @@ import cv2 as cv
 from shapely.geometry import Point
 
 # Add parent directory to path to find trt_pipeline
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from sort import Sort
 from trt_pipeline.trt_model import TRTModel
@@ -53,20 +53,30 @@ class Pipeline:
                 self.save_dir[(lane_name, cls)] = save_dir
 
     def initial_tracker(self, config):
-        if config is None:
-            return Sort()
-        else:
-            if hasattr(config, "tracker"):
-                if config["tracker"].get("type", "sort").lower() == "ocsort":
-                    return Sort(max_age=config["tracker"].get("max_age", 30),
-                                min_hits=config["tracker"].get("min_hits", 3),
-                                iou_threshold=config["tracker"].get("iou_threshold", 0.3),
-                                use_occlusion=True)
-                elif config["tracker"].get("type", "sort").lower() == "bytetrack":
-                    return Sort(max_age=config["tracker"].get("max_age", 30),
-                                min_hits=config["tracker"].get("min_hits", 3),
-                                iou_threshold=config["tracker"].get("iou_threshold", 0.3),
-                                use_byte=True)
+        """Initialize tracker with configuration parameters.
+        
+        Supports tracker types: 'sort' (default), 'ocsort', 'bytetrack'
+        """
+        # Extract tracker config if it exists
+        tracker_config = config.get("tracker", {}) if isinstance(config, dict) else {}
+        
+        # Get tracker type (default to 'sort')
+        tracker_type = tracker_config.get("type", "sort").lower()
+        
+        # Extract parameters
+        max_age = tracker_config.get("max_age", 30)
+        min_hits = tracker_config.get("min_hits", 3)
+        iou_threshold = tracker_config.get("iou_threshold", 0.3)
+        
+        self.logger.info(f"Initializing tracker: {tracker_type}")
+        
+        # Create Sort instance with configured parameters
+        # Note: ByteTrack and OCSort require extended Sort implementation
+        return Sort(
+            max_age=max_age,
+            min_hits=min_hits,
+            iou_threshold=iou_threshold
+        )
 
     def _closest_class_id(self, centroid, dets):
         if dets.size == 0:

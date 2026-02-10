@@ -1,6 +1,12 @@
 {
     "video": "../video/south_video.avi",
     "output": "../output/JETSON_Test",
+    "tracker": {
+        "type": "sort",
+        "max_age": 30,
+        "min_hits": 3,
+        "iou_threshold": 0.3
+    },
     "tracking": [
         {
             "name": "left_lane",
