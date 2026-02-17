@@ -1,6 +1,6 @@
 {
-    "video": "../video/south_video.avi",
-    "output": "../output/JETSON_Test2",
+    "video": "south_video.avi",
+    "output": "JETSON_Test2",
     "tracker": {
         "type": "ocsort",
         "max_age": 30,
