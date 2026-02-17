@@ -24,12 +24,12 @@ from trt_pipeline.tools import (
 
 
 class Pipeline:
-    def __init__(self, config_path: str, engine_path: str, save_crop: bool = False):
+    def __init__(self, config_path: str, engine_path: str, save_crop: bool = False, root_dir: str = None):
         self.logger = get_logger("JetsonPipeline")
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.logger.info(f"Device: {self.device}")
 
-        self.config = initial_config(config_path)
+        self.config = initial_config(config_path, root_dir=root_dir)
         self.save_crop = save_crop
 
         self.skip = int(self.config.get("skip", 0))

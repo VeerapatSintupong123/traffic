@@ -67,6 +67,7 @@ def main():
         config_path=config_path,
         engine_path=args.engine,
         save_crop=args.save_crop,
+        root_dir=root_dir,
     )
     pipeline.run()
 

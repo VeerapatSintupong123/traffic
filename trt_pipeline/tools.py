@@ -27,7 +27,7 @@ def cleanup():
 
     gc.collect()
 
-def initial_config(config_path: str):
+def initial_config(config_path: str, root_dir: str = None):
     if not os.path.exists(config_path):
         raise FileNotFoundError(
             f"Config file not found: {config_path}\n"
@@ -44,6 +44,20 @@ def initial_config(config_path: str):
     missing_keys = [key for key in required_keys if key not in config]
     if missing_keys:
         raise KeyError(f"Missing required configuration keys: {missing_keys}")
+
+    # Resolve relative paths if root_dir is provided
+    if root_dir:
+        # If video path is just a filename, prepend video directory
+        if not os.path.isabs(config["video"]) and os.sep not in config["video"] and "/" not in config["video"]:
+            config["video"] = os.path.join(root_dir, "video", config["video"])
+        elif not os.path.isabs(config["video"]):
+            config["video"] = os.path.join(root_dir, config["video"])
+        
+        # If output path is just a filename/dirname, prepend output directory
+        if not os.path.isabs(config["output"]) and os.sep not in config["output"] and "/" not in config["output"]:
+            config["output"] = os.path.join(root_dir, "output", config["output"])
+        elif not os.path.isabs(config["output"]):
+            config["output"] = os.path.join(root_dir, config["output"])
 
     os.makedirs(config["output"], exist_ok=True)
 
