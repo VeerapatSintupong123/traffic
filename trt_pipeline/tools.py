@@ -29,7 +29,10 @@ def cleanup():
 
 def initial_config(config_path: str):
     if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+        raise FileNotFoundError(
+            f"Config file not found: {config_path}\n"
+            f"Absolute path checked: {os.path.abspath(config_path)}"
+        )
         
     try:
         with open(config_path, 'r') as f:
