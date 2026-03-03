@@ -17,7 +17,7 @@ from trt_pipeline.tools import (
     get_logger, cleanup, initial_config, initial_lane_data, to_original_coords,
     parse_zones, side_of_line, save_lane_data
 )
-from JETSON.src.jtop import JTopMonitor
+from JETSON.src.jtop_logging import JTopMonitor
 
 class Pipeline:
     def __init__(self, config_path: str, engine_path: str, save_crop: bool = False, root_dir: str = None):
