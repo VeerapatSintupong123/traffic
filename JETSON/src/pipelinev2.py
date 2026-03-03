@@ -223,14 +223,28 @@ class PipelineV2:
         save_lane_data(self.lane_data, os.path.join(self.config["output"], "lane_data.json"))
 
     def _preprocess_frame(self, frame_bgr):
-        """Preprocess frame: convert to CHW format and normalize.
-        
-        Note: Resizing handled by GStreamer pipeline
-        """
+        """Preprocess frame: resize to 640x640 with letterbox, convert to CHW format and normalize."""
         t0 = time.perf_counter()
         
+        # Letterbox resize using pre-calculated transform parameters
+        target_size = 640
+        h, w = frame_bgr.shape[:2]
+        
+        # Resize frame using pre-calculated scale factor
+        new_w = int(w * self.ratio)
+        new_h = int(h * self.ratio)
+        resized = cv.resize(frame_bgr, (new_w, new_h), interpolation=cv.INTER_LINEAR)
+        
+        # Create letterbox canvas
+        canvas = np.full((target_size, target_size, 3), 114, dtype=np.uint8)
+        
+        # Place resized image on canvas using pre-calculated offsets
+        dw_int = int(self.dw)
+        dh_int = int(self.dh)
+        canvas[dh_int:dh_int + new_h, dw_int:dw_int + new_w] = resized
+        
         # HWC BGR -> CHW BGR
-        img_chw = frame_bgr.transpose(2, 0, 1)
+        img_chw = canvas.transpose(2, 0, 1)
         img_chw = np.ascontiguousarray(img_chw, dtype=np.float32) / 255.0
         
         # To tensor
