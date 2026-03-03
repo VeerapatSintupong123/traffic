@@ -60,10 +60,6 @@ def main():
 
     # --- Video Stream Initialization ---
     stream = VideoStream(video_path=VIDEO_PATH, skip=1, queue_size=2)
-    if not stream.is_opened():
-        logger.error(f"Failed to open video: {VIDEO_PATH}")
-        return
-    logger.info(f"Video stream opened: {VIDEO_PATH}")
 
     timing_stats = defaultdict(list)
     total_start = time.perf_counter()
@@ -91,7 +87,12 @@ def main():
         # --- Preprocessing ---
         start_event.record()
 
-        input_tensor = torch.from_numpy(frame_bgr).to(device).float()
+        input_img, _, _ = letterbox(frame_bgr, (640, 640))
+        # HWC to CHW, BGR to RGB
+        input_img = input_img.transpose((2, 0, 1))[::-1]
+        input_img = np.ascontiguousarray(input_img)
+
+        input_tensor = torch.from_numpy(input_img).to(device).float()
         input_tensor = input_tensor.permute(2, 0, 1) # HWC to CHW
         shape = input_tensor.shape[1:]
         r = min(640 / shape[0], 640 / shape[1])
