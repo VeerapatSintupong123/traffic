@@ -186,7 +186,7 @@ class PipelineV2:
         # Use hardware decoder and scaler
         pipeline = (
             f"filesrc location={self.video_path} ! "
-            "avidemux ! h264parse ! "
+            "qtdemux ! h264parse ! "
             "nvv4l2decoder ! "
             "nvvidconv ! "
             "video/x-raw, width=640, height=640, format=BGRx ! "
