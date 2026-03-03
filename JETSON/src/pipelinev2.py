@@ -194,10 +194,7 @@ class PipelineV2:
         else:
             pipeline = (
                 f"filesrc location=\"{self.video_path}\" ! "
-                "qtdemux name=demux "
-                "demux.video_0 ! queue ! "
-                "h264parse ! "
-                "nvv4l2decoder ! "
+                "qtdemux ! decodebin ! "
                 "nvvidconv ! "
                 "video/x-raw, width=640, height=640, format=BGRx ! "
                 "videoconvert ! "
