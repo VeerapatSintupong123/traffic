@@ -73,7 +73,7 @@ class PipelineV2:
             self.save_dir = {}
 
         # -- Video Properties --
-        self.original_width, self.original_height = self._get_video_dimensions(self.video_path)
+        self.original_width, self.original_height, self.fps = self._get_video_properties(self.video_path)
         self.ratio, self.dw, self.dh = self._calculate_transform_params(
             self.original_width, self.original_height
         )
@@ -83,17 +83,21 @@ class PipelineV2:
         self.timing_stats = []
         self.resource_stats = []
     
-    def _get_video_dimensions(self, video_path):
-        """Get original video width and height."""
+    def _get_video_properties(self, video_path):
+        """Get original video width, height, and fps."""
         cap = cv.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open video: {video_path}")
-        
+
         width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+        fps = float(cap.get(cv.CAP_PROP_FPS))
         cap.release()
-        
-        return width, height
+
+        if fps <= 0:
+            fps = 25.0
+
+        return width, height, fps
 
     def _calculate_transform_params(self, orig_width, orig_height, target_size=640):
         """Calculate letterbox transform parameters.
