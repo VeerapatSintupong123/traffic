@@ -19,7 +19,7 @@ from trt_pipeline.tools import (
 )
 from JETSON.src.jtop_logging import JTopMonitor
 
-class Pipeline:
+class PipelineV2:
     def __init__(self, config_path: str, engine_path: str, save_crop: bool = False, root_dir: str = None):
         self.logger = get_logger("JetsonPipelineV2")
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -42,13 +42,11 @@ class Pipeline:
         self.tracking_zone = parse_zones(self.config["tracking"])
 
         # Model loading
-        self.logger.info("Loading TensorRT engine...")
         self.model = TRTModel(
             engine_path=engine_path,
             input_shape=(1, 3, 640, 640),
             device=self.device,
         )
-        self.logger.info("TensorRT engine loaded successfully.")
 
         # -- Paths --
         self.VIDEO_DIR = os.makedirs(os.path.join(self.root_dir, "video"), exist_ok=True)

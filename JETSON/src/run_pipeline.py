@@ -71,8 +71,8 @@ def main():
         )
         pipeline.run()
     elif args.pipeline_version == 2:
-        from pipelinev2 import Pipeline
-        pipeline = Pipeline(
+        from pipelinev2 import PipelineV2
+        pipeline = PipelineV2(
             config_path=config_path,
             engine_path=args.engine,
             save_crop=args.save_crop,
