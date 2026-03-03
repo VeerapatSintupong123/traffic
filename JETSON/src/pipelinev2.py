@@ -40,7 +40,7 @@ class PipelineV2:
         self.scale = self.config.get("scale", 1.0)
         self.tracker = self._initial_tracker(self.config)
         self.tracking_zone = parse_zones(self.config["tracking"])
-        self.lane_data = initial_lane_data(self.config.get("lanes", {}))
+        self.lane_data = initial_lane_data(self.config.get("lanes", {}), self.dict_class)
 
         # Model loading
         self.model = TRTModel(
