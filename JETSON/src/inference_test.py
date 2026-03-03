@@ -93,18 +93,6 @@ def main():
         input_img = np.ascontiguousarray(input_img)
 
         input_tensor = torch.from_numpy(input_img).to(device).float()
-        input_tensor = input_tensor.permute(2, 0, 1) # HWC to CHW
-        shape = input_tensor.shape[1:]
-        r = min(640 / shape[0], 640 / shape[1])
-        r = min(r, 1.0)
-        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-        dw, dh = 640 - new_unpad[0], 640 - new_unpad[1]
-        if shape[::-1] != new_unpad:
-            input_tensor = torch.nn.functional.interpolate(input_tensor.unsqueeze(0), size=new_unpad, mode='bilinear', align_corners=False).squeeze(0)
-        dw, dh = dw / 2, dh / 2
-        top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
-        left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-        input_tensor = torch.nn.functional.pad(input_tensor, (left, right, top, bottom), "constant", 114)
         input_tensor = input_tensor.div(255.0).unsqueeze(0)
         end_event.record()
         torch.cuda.synchronize() # Wait for preprocessing to finish to get its time
