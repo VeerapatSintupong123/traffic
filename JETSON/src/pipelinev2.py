@@ -358,7 +358,6 @@ class PipelineV2:
             f.write(f"Total Time: {total_time:.2f}s\n")
             f.write(f"Average FPS: {fps:.2f}\n")
             f.write(f"GStreamer Preprocessing: Enabled\n")
-            f.write(f"JTop Interval: Every {self.jtop_interval} frames\n")
             f.write("="*60 + "\n")
         
         self.logger.info(f"Saved summary to {summary_file}")
@@ -370,7 +369,6 @@ class PipelineV2:
 
         if self.jtop_monitor:
             self.jtop_monitor.start()
-            self.logger.info(f"JTop monitoring enabled (interval: {self.jtop_interval} frames)")
         total_start = time.perf_counter()
         processed_frames = 0
 
