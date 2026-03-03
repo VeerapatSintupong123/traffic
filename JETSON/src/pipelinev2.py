@@ -36,10 +36,11 @@ class PipelineV2:
         self.config = initial_config(config_path, root_dir=root_dir)
         self.video_name = self.config.get("video")
         self.output_name = self.config.get("output", "output")
-        self.skip = self.config.get("skip", 1)
+        self.skip = max(1, int(self.config.get("skip", 1)))
         self.scale = self.config.get("scale", 1.0)
         self.tracker = self._initial_tracker(self.config)
         self.tracking_zone = parse_zones(self.config["tracking"])
+        self.lane_data = initial_lane_data(self.config.get("lanes", {}))
 
         # Model loading
         self.model = TRTModel(
@@ -80,7 +81,7 @@ class PipelineV2:
 
         # -- Resource Monitoring --
         self.jtop_monitor = JTopMonitor()
-        self.timing_stats = []
+        self.timing_stats = {"frames": []}
         self.resource_stats = []
     
     def _get_video_properties(self, video_path):
@@ -327,12 +328,13 @@ class PipelineV2:
         """Store frame timing statistics."""
         stat = {"frame_idx": frame_idx}
         stat.update({k: v * 1000 for k, v in timings.items()})  # Convert to ms
-        self.timing_stats["frames"].append(stat)  
+        self.timing_stats["frames"].append(stat)
+        return stat  
 
     def _save_results(self, total_time, processed_frames):
         """Save performance and resource logs."""
         # Timing statistics
-        timing_file = os.path.join(self.output_dir, "timing_stats.csv")
+        timing_file = os.path.join(self.OUTPUT_DIR, "timing_stats.csv")
         if self.timing_stats["frames"]:
             keys = self.timing_stats["frames"][0].keys()
             with open(timing_file, 'w', newline='') as f:
@@ -342,7 +344,7 @@ class PipelineV2:
             self.logger.info(f"Saved timing stats to {timing_file}")
 
         # Resource statistics
-        resource_file = os.path.join(self.output_dir, "resource_stats.csv")
+        resource_file = os.path.join(self.OUTPUT_DIR, "resource_stats.csv")
         if self.resource_stats:
             keys = self.resource_stats[0].keys()
             with open(resource_file, 'w', newline='') as f:
@@ -353,7 +355,7 @@ class PipelineV2:
 
         # Summary
         fps = processed_frames / total_time if total_time > 0 else 0.0
-        summary_file = os.path.join(self.output_dir, "summary.txt")
+        summary_file = os.path.join(self.OUTPUT_DIR, "summary.txt")
         with open(summary_file, 'w') as f:
             f.write("="*60 + "\n")
             f.write("PIPELINE EXECUTION SUMMARY\n")
@@ -365,6 +367,7 @@ class PipelineV2:
             f.write("="*60 + "\n")
         
         self.logger.info(f"Saved summary to {summary_file}")
+        self.logger.info("Pipeline completed successfully.")
 
     def run(self):
         self.logger.info("Starting optimized pipeline with GStreamer preprocessing...")
@@ -440,11 +443,6 @@ class PipelineV2:
                 processed_frames += 1
                 if processed_frames > max_frames:
                     break
-
-                # Total frame time
-                frame_time = time.perf_counter() - frame_start
-                timings['total_frame'] = frame_time
-                self.time_stats.append(timings)
         except KeyboardInterrupt:
             self.logger.warning("Pipeline interrupted by user")
         except Exception as e:
@@ -462,8 +460,9 @@ class PipelineV2:
                 self.resource_stats = self.jtop_monitor.get_stats()
             
             cleanup()
-            save_lane_data(self.lane_data, os.path.join(self.output_dir, "lane_data.json"))
+            save_lane_data(self.lane_data, os.path.join(self.OUTPUT_DIR, "lane_data.json"))
             
             self._save_results(total_time, processed_frames)
-            self.logger.info(f"Pipeline completed: {processed_frames} frames in {total_time:.2f}s ({processed_frames / total_time:.2f} FPS)")
+            if total_time > 0:
+                self.logger.info(f"Pipeline completed: {processed_frames} frames in {total_time:.2f}s ({processed_frames / total_time:.2f} FPS)")
             
