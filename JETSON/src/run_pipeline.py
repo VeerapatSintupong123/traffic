@@ -43,6 +43,36 @@ def resolve_config_path(config_arg, root_dir, logger):
     logger.error(f"Config file NOT FOUND! Checked: {config_in_root}, {config_in_cwd}")
     return config_in_root
 
+def resolve_engine_path(engine_arg, root_dir, logger):
+    """
+    Resolve engine file path with multiple fallbacks.
+    Tries: exact path -> root_dir/models/ -> ./models/
+    """
+    engine_arg = str(engine_arg)
+    logger.info(f"Searching for engine: {engine_arg}")
+    
+    # Try 1: Use as-is (full path or relative to cwd)
+    if os.path.exists(engine_arg):
+        logger.info(f"Engine file found at provided path: {engine_arg}")
+        return os.path.abspath(engine_arg)
+    
+    # Try 2: Look in root_dir/models/
+    engine_in_root = os.path.join(root_dir, "models", engine_arg)
+    logger.info(f"Trying: {engine_in_root}")
+    if os.path.exists(engine_in_root):
+        logger.info(f"✓ Engine file found in root_dir/models/: {engine_in_root}")
+        return engine_in_root
+    
+    # Try 3: Look in ./models/ (current working directory)
+    engine_in_cwd = os.path.join("models", engine_arg)
+    logger.info(f"Trying: {engine_in_cwd}")
+    if os.path.exists(engine_in_cwd):
+        logger.info(f"✓ Engine file found in current working directory models/: {engine_in_cwd}")
+        return os.path.abspath(engine_in_cwd)
+    
+    logger.error(f"Engine file NOT FOUND! Checked: {engine_in_root}, {engine_in_cwd}")
+    raise FileNotFoundError(f"Engine file not found: {engine_arg}")
+
 def main():
     # Get script location and work backwards to find project root
     script_dir = os.path.dirname(os.path.abspath(__file__))  # JETSON/src
@@ -53,19 +83,22 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run Jetson TRT Pipeline with SORT")
     parser.add_argument("--config", required=True, help="Config filename (e.g., 'config_south_jetson2')")
-    parser.add_argument("--engine", default=os.path.join(root_dir, "models", "yolov7-tiny.engine"), help="Path to TensorRT engine")
+    parser.add_argument("--engine", default="yolov7-tiny.engine", help="Path to TensorRT engine")
     parser.add_argument("--save-crop", action="store_true", help="Save cropped images")
     parser.add_argument("--pipeline-version", type=int, default=2, help="Pipeline version to run (default: 2)")
     args = parser.parse_args()
 
     config_path = resolve_config_path(args.config, root_dir, logger)
+    engine_path = resolve_engine_path(args.engine, root_dir, logger)
+
     logger.info(f"Using config file: {config_path}")
+    logger.info(f"Using engine file: {engine_path}")
 
     if args.pipeline_version == 1:
         from pipeline import Pipeline
         pipeline = Pipeline(
             config_path=config_path,
-            engine_path=args.engine,
+            engine_path=engine_path,
             save_crop=args.save_crop,
             root_dir=root_dir,
         )
@@ -74,7 +107,7 @@ def main():
         from pipelinev2 import PipelineV2
         pipeline = PipelineV2(
             config_path=config_path,
-            engine_path=args.engine,
+            engine_path=engine_path,
             save_crop=args.save_crop,
             root_dir=root_dir,
         )
