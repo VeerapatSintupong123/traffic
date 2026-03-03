@@ -49,8 +49,10 @@ class PipelineV2:
         )
 
         # -- Paths --
-        self.VIDEO_DIR = os.makedirs(os.path.join(self.root_dir, "video"), exist_ok=True)
-        self.OUTPUT_DIR = os.makedirs(os.path.join(self.root_dir, "output", self.output_name), exist_ok=True)
+        self.VIDEO_DIR = os.path.join(self.root_dir, "video")
+        self.OUTPUT_DIR = os.path.join(self.root_dir, "output", self.output_name)
+        os.makedirs(self.VIDEO_DIR, exist_ok=True)
+        os.makedirs(self.OUTPUT_DIR, exist_ok=True)
         self.video_path = os.path.join(self.VIDEO_DIR, self.video_name)
         if os.path.exists(self.video_path):
             self.logger.info(f"Video found: {self.video_path}")
