@@ -54,12 +54,16 @@ class PipelineV2:
         self.OUTPUT_DIR = os.path.join(self.root_dir, "output", self.output_name)
         os.makedirs(self.VIDEO_DIR, exist_ok=True)
         os.makedirs(self.OUTPUT_DIR, exist_ok=True)
-        self.video_path = os.path.join(self.VIDEO_DIR, self.video_name)
-        if os.path.exists(self.video_path):
-            self.logger.info(f"Video found: {self.video_path}")
+
+        if 'rtsp://' in self.video_name:
+            self.video_path = self.video_name
         else:
-            self.logger.error(f"Video not found: {self.video_path}")
-            raise FileNotFoundError(f"Video not found: {self.video_path}")
+            self.video_path = os.path.join(self.VIDEO_DIR, self.video_name)
+            if os.path.exists(self.video_path):
+                self.logger.info(f"Video found: {self.video_path}")
+            else:
+                self.logger.error(f"Video not found: {self.video_path}")
+                raise FileNotFoundError(f"Video not found: {self.video_path}")
 
         if self.save_crop:
             self.image_saver = AsyncImageSaver()
@@ -177,25 +181,29 @@ class PipelineV2:
         return int(dets[idx, 5])
 
     def _get_gstreamer_pipeline(self):
-        """Build optimized GStreamer pipeline for hardware-accelerated decoding.
-        
-        Pipeline:
-            filesrc -> avidemux -> h264parse -> nvv4l2decoder (HW decode)
-            -> nvvidconv (HW resize/colorspace) -> appsink
-        """
-        # Use hardware decoder and scaler
-        pipeline = (
-            f"filesrc location={self.video_path} ! "
-            "qtdemux ! h264parse ! "
-            "nvv4l2decoder ! "
-            "nvvidconv ! "
-            "video/x-raw, width=640, height=640, format=BGRx ! "
-            "videoconvert ! "
-            "video/x-raw, format=BGR ! "
-            "appsink"
-        )
-        
-        self.logger.info("Using hardware-accelerated GStreamer pipeline")
+        if self.video_path.startswith("rtsp://"):
+            pipeline = (
+                f"rtspsrc location=\"{self.video_path}\" latency=0 ! "
+                "rtph264depay ! h264parse ! nvv4l2decoder ! "
+                "nvvidconv ! "
+                "video/x-raw, width=640, height=640, format=BGRx ! "
+                "videoconvert ! "
+                "video/x-raw, format=BGR ! "
+                "appsink drop=true sync=false"
+            )
+        else:
+            pipeline = (
+                f"filesrc location=\"{self.video_path}\" ! "
+                "qtdemux name=demux "
+                "demux.video_0 ! queue ! "
+                "h264parse ! "
+                "nvv4l2decoder ! "
+                "nvvidconv ! "
+                "video/x-raw, width=640, height=640, format=BGRx ! "
+                "videoconvert ! "
+                "video/x-raw, format=BGR ! "
+                "appsink drop=true sync=false"
+            )
         return pipeline
 
     def save_performance_log(self):
