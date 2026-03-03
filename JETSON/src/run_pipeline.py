@@ -1,6 +1,4 @@
 import argparse
-from pipeline import Pipeline
-from pathlib import Path
 import os
 import sys
 
@@ -57,18 +55,33 @@ def main():
     parser.add_argument("--config", required=True, help="Config filename (e.g., 'config_south_jetson2')")
     parser.add_argument("--engine", default=os.path.join(root_dir, "models", "yolov7-tiny.engine"), help="Path to TensorRT engine")
     parser.add_argument("--save-crop", action="store_true", help="Save cropped images")
+    parser.add_argument("--pipeline-version", type=int, default=2, help="Pipeline version to run (default: 2)")
     args = parser.parse_args()
 
     config_path = resolve_config_path(args.config, root_dir, logger)
     logger.info(f"Using config file: {config_path}")
 
-    pipeline = Pipeline(
-        config_path=config_path,
-        engine_path=args.engine,
-        save_crop=args.save_crop,
-        root_dir=root_dir,
-    )
-    pipeline.run()
+    if args.pipeline_version == 1:
+        from pipeline import Pipeline
+        pipeline = Pipeline(
+            config_path=config_path,
+            engine_path=args.engine,
+            save_crop=args.save_crop,
+            root_dir=root_dir,
+        )
+        pipeline.run()
+    elif args.pipeline_version == 2:
+        from pipelinev2 import Pipeline
+        pipeline = Pipeline(
+            config_path=config_path,
+            engine_path=args.engine,
+            save_crop=args.save_crop,
+            root_dir=root_dir,
+        )
+        pipeline.run()
+    else:
+        logger.error(f"Invalid pipeline version: {args.pipeline_version}. Must be 1 or 2.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
