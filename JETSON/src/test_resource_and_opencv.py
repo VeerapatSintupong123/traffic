@@ -3,19 +3,17 @@ import cv2 as cv
 import os
 import sys
 
-import time
-
 def read_stats(jetson):
     stats = jetson.stats
     log_entry = {
-        'time': stats['Time'],
-        'gpu': stats['GPU'],
-        'ram': stats['RAM'],
-        'swap': stats['SWAP'],
-        'iram': stats['IRAM'],
-        'cpu': stats['CPU'],
-        'temp': stats['Temp'],
-        'power': stats['Power'],
+        'time': stats.get('time'),
+        'gpu': stats.get('GPU'),
+        'ram': stats.get('RAM'),
+        'swap': stats.get('SWAP'),
+        'iram': stats.get('IRAM'),
+        'cpus': stats.get('cpus'),
+        'temp': stats.get('Temp'),
+        'power': stats.get('power'),
     }
     return log_entry
 
@@ -37,7 +35,7 @@ def main():
             while cap.isOpened():
                 # Start of the loop, read stats
                 log_entry = read_stats(jetson)
-                log[log_entry['time']] = log_entry
+                log[len(log)] = log_entry
 
                 ret, frame = cap.read()
                 if not ret:
@@ -60,7 +58,6 @@ def main():
                 elapsed_time_ms = cv.cuda.Event_elapsedTime(start_event, end_event)
                 print(f"GPU processing time: {elapsed_time_ms:.2f} ms")
 
-                time.sleep(0.1)
 
     except Exception as e:
         print(f"An error occurred: {e}")
