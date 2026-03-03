@@ -2,23 +2,42 @@ from jtop import jtop
 import cv2 as cv
 import os
 import sys
+import time
+import json
 
 def read_stats(jetson):
     stats = jetson.stats
+    # print(stats)
     log_entry = {
-        'time': stats.get('time'),
+        'time': str(stats.get('time')),
         'gpu': stats.get('GPU'),
         'ram': stats.get('RAM'),
         'swap': stats.get('SWAP'),
         'iram': stats.get('IRAM'),
-        'cpus': stats.get('cpus'),
-        'temp': stats.get('Temp'),
-        'power': stats.get('power'),
+        'cpus': [
+            stats.get('CPU1'),
+            stats.get('CPU2'),
+            stats.get('CPU3'),
+            stats.get('CPU4'),
+        ],
+        'temp': {
+            'AO': stats.get('Temp AO'),
+            'CPU': stats.get('Temp CPU'),
+            'GPU': stats.get('Temp GPU'),
+            'PLL': stats.get('Temp PLL'),
+            'thermal': stats.get('Temp thermal'),
+        },
+        'power': {
+            'CPU': stats.get('Power POM_5V_CPU'),
+            'GPU': stats.get('Power POM_5V_GPU'),
+            'total': stats.get('Power TOT'),
+        }
     }
     return log_entry
 
 def main():
     log = {}
+    log_file_path = 'jetson_stats.json'
     video_path = '/home/schauto/traffic/video/south_video.avi' 
     cap = cv.VideoCapture(video_path)
 
@@ -27,12 +46,12 @@ def main():
         sys.exit(1)
 
     stream1 = cv.cuda_Stream()
-    start_event = cv.cuda.Event(cv.cuda.EVENT_DISABLE_TIMING)
-    end_event = cv.cuda.Event(cv.cuda.EVENT_DISABLE_TIMING)
+    start_event = cv.cuda.Event()
+    end_event = cv.cuda.Event()
 
     try:
         with jtop() as jetson:
-            while cap.isOpened():
+            while cap.isOpened() and jetson.ok():
                 # Start of the loop, read stats
                 log_entry = read_stats(jetson)
                 log[len(log)] = log_entry
@@ -64,8 +83,12 @@ def main():
     finally:
         if cap.isOpened():
             cap.release()
+        
+        with open(log_file_path, 'w') as f:
+            json.dump(log, f, indent=4)
+
         print("Resources released.")
-        print(f"Collected {len(log)} log entries.")
+        print(f"Collected {len(log)} log entries and saved to '{log_file_path}'")
 
 if __name__ == "__main__":
     main()
