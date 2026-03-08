@@ -8,7 +8,7 @@ import cv2 as cv
 from shapely.geometry import Point
 import psutil
 import subprocess
-from collections import defaultdict
+import csv
 
 # Add parent directory to path to find trt_pipeline
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -58,7 +58,8 @@ class Pipeline:
         
         # Resource monitoring
         self.process = psutil.Process()
-        self.timing_stats = defaultdict(list)
+        self.timing_stats = []
+        self.resource_stats = []
         self.resource_log_interval = 100
 
     def initial_tracker(self, config):
@@ -146,6 +147,15 @@ class Pipeline:
         
         log_msg += f"{'='*60}"
         self.logger.info(log_msg)
+
+        self.resource_stats.append({
+            "frame_idx": frame_idx,
+            "gpu_alloc_mb": round(gpu_alloc, 1),
+            "gpu_reserved_mb": round(gpu_reserved, 1),
+            "cpu_percent": round(cpu_percent, 1),
+            "ram_mb": round(ram_mb, 1),
+            "ram_percent": round(ram_percent, 1),
+        })
 
     def _closest_class_id(self, centroid, dets):
         if dets.size == 0:
@@ -286,82 +296,56 @@ class Pipeline:
             frame_time = time.perf_counter() - frame_start
             stage_timings['total_frame'] = frame_time
             
-            # Store timing stats
-            for stage, duration in stage_timings.items():
-                self.timing_stats[stage].append(duration)
+            # Store timing stats (per-frame dict in ms for CSV)
+            timing_row = {"frame_idx": frame_idx}
+            timing_row.update({k: v * 1000 for k, v in stage_timings.items()})
+            self.timing_stats.append(timing_row)
             
             # Periodic resource logging
             if frame_idx % self.resource_log_interval == 0:
-                avg_timings = {
-                    stage: np.mean(durations[-self.resource_log_interval:])
-                    for stage, durations in self.timing_stats.items()
-                }
-                self.log_resources(frame_idx, avg_timings)
+                self.log_resources(frame_idx, stage_timings)
 
         total_time = time.perf_counter() - total_start
         fps = (processed_frames / total_time) if total_time > 0 else 0.0
         self.logger.info(f"Total time: {total_time:.2f}s | FPS: {fps:.2f}")
-        
-        # Compute and log detailed timing statistics
-        self.logger.info("\n" + "="*60)
-        self.logger.info("PERFORMANCE SUMMARY")
-        self.logger.info("="*60)
-        
-        for stage in ['video_read', 'preprocessing', 'inference', 'post_inference', 
-                      'tracking', 'lane_crossing', 'total_frame']:
-            if stage in self.timing_stats:
-                timings = self.timing_stats[stage]
-                avg_ms = np.mean(timings) * 1000
-                std_ms = np.std(timings) * 1000
-                min_ms = np.min(timings) * 1000
-                max_ms = np.max(timings) * 1000
-                median_ms = np.median(timings) * 1000
-                
-                self.logger.info(
-                    f"{stage:20s}: avg={avg_ms:6.2f}ms  std={std_ms:5.2f}ms  "
-                    f"min={min_ms:6.2f}ms  max={max_ms:6.2f}ms  median={median_ms:6.2f}ms"
-                )
-        
-        # Final resource check
-        gpu_alloc, gpu_reserved = self.get_gpu_memory()
-        cpu_percent, ram_mb, ram_percent = self.get_system_resources()
-        self.logger.info("="*60)
-        self.logger.info(f"Final GPU Memory: {gpu_alloc:.1f} MB allocated, {gpu_reserved:.1f} MB reserved")
-        self.logger.info(f"Final CPU Usage: {cpu_percent:.1f}%")
-        self.logger.info(f"Final RAM Usage: {ram_mb:.1f} MB ({ram_percent:.1f}%)")
-        self.logger.info("="*60)
 
-        inference_path = os.path.join(self.config["output"], "inference.txt")
-        with open(inference_path, "w") as f:
-            f.write(f"Total frames: {processed_frames}\n")
-            f.write(f"Total time (s): {total_time:.2f}\n")
+        output_dir = self.config["output"]
+
+        # Save timing_stats.csv
+        timing_file = os.path.join(output_dir, "timing_stats.csv")
+        if self.timing_stats:
+            keys = self.timing_stats[0].keys()
+            with open(timing_file, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=keys)
+                writer.writeheader()
+                writer.writerows(self.timing_stats)
+            self.logger.info(f"Saved timing stats to {timing_file}")
+
+        # Save resource_stats.csv
+        resource_file = os.path.join(output_dir, "resource_stats.csv")
+        if self.resource_stats:
+            keys = self.resource_stats[0].keys()
+            with open(resource_file, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=keys)
+                writer.writeheader()
+                writer.writerows(self.resource_stats)
+            self.logger.info(f"Saved resource stats to {resource_file}")
+
+        # Save summary.txt
+        summary_file = os.path.join(output_dir, "summary.txt")
+        with open(summary_file, 'w') as f:
+            f.write("=" * 60 + "\n")
+            f.write("PIPELINE EXECUTION SUMMARY\n")
+            f.write("=" * 60 + "\n")
+            f.write(f"Total Frames: {processed_frames}\n")
+            f.write(f"Total Time: {total_time:.2f}s\n")
             f.write(f"Average FPS: {fps:.2f}\n")
-            f.write("\n" + "="*60 + "\n")
-            f.write("Stage Timings (ms):\n")
-            f.write("="*60 + "\n")
-            for stage in ['video_read', 'preprocessing', 'inference', 'post_inference',
-                          'tracking', 'lane_crossing', 'total_frame']:
-                if stage in self.timing_stats:
-                    timings = self.timing_stats[stage]
-                    avg_ms = np.mean(timings) * 1000
-                    std_ms = np.std(timings) * 1000
-                    min_ms = np.min(timings) * 1000
-                    max_ms = np.max(timings) * 1000
-                    median_ms = np.median(timings) * 1000
-                    f.write(
-                        f"{stage:20s}: avg={avg_ms:6.2f}ms  std={std_ms:5.2f}ms  "
-                        f"min={min_ms:6.2f}ms  max={max_ms:6.2f}ms  median={median_ms:6.2f}ms\n"
-                    )
-            f.write("\n" + "="*60 + "\n")
-            f.write("Resource Usage:\n")
-            f.write("="*60 + "\n")
-            f.write(f"Final GPU Memory: {gpu_alloc:.1f} MB allocated, {gpu_reserved:.1f} MB reserved\n")
-            f.write(f"Final CPU Usage: {cpu_percent:.1f}%\n")
-            f.write(f"Final RAM Usage: {ram_mb:.1f} MB ({ram_percent:.1f}%)\n")
+            f.write("=" * 60 + "\n")
+        self.logger.info(f"Saved summary to {summary_file}")
 
         cleanup()
         self.image_saver.stop()
         self.logger.info("Resources cleaned up.")
 
-        save_lane_data(self.lane_data, os.path.join(self.config["output"], "lane_data.json"))
-        self.logger.info("Outputs saved successfully.")
+        save_lane_data(self.lane_data, os.path.join(output_dir, "lane_data.json"))
+        self.logger.info("Pipeline completed successfully.")
