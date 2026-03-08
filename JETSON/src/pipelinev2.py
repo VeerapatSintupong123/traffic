@@ -345,9 +345,9 @@ class PipelineV2:
 
         return time.perf_counter() - t0
 
-    def _log_timing_stats(self, frame_idx, timings):
+    def _log_timing_stats(self, frame_idx, timestamp, timings):
         """Store frame timing statistics."""
-        stat = {"frame_idx": frame_idx}
+        stat = {"frame_idx": frame_idx, "timestamp": timestamp}
         stat.update({k: v * 1000 for k, v in timings.items()})  # Convert to ms
         self.timing_stats["frames"].append(stat)
         return stat  
@@ -449,9 +449,10 @@ class PipelineV2:
                 timings['lane_crossing'] = lane_cross_time
 
                 timings['total_frame'] = time.perf_counter() - frame_start
+                timings['timestamp'] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
                 # -- Logging --
-                self._log_timing_stats(processed_frames, timings)
+                self._log_timing_stats(processed_frames, timings['timestamp'], timings)
 
                 if processed_frames % 50 == 0:
                     avg_fps = processed_frames / (time.perf_counter() - total_start)
