@@ -4,7 +4,7 @@ import time
 import torch
 import numpy as np
 import cv2 as cv
-from jtop import jtop
+from JETSON.src.jtop_logging import jtop
 from collections import defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -87,7 +87,7 @@ def main():
         # --- Preprocessing ---
         start_event.record()
 
-        input_img, _, _ = letterbox(frame_bgr, (640, 640))
+        input_img, _, _ = letterbox(frame_bgr, (640, 640), auto=False)
         # HWC to CHW, BGR to RGB
         input_img = input_img.transpose((2, 0, 1))[::-1]
         input_img = np.ascontiguousarray(input_img)
