@@ -82,6 +82,8 @@ class PipelineV2:
         self.ratio, self.dw, self.dh = self._calculate_transform_params(
             self.original_width, self.original_height
         )
+        self.logger.info(f"Original video properties: width={self.original_width}, height={self.original_height}, fps={self.fps}")
+        self.logger.info(f"Letterbox transform params: ratio={self.ratio:.4f}, dw={self.dw:.2f}, dh={self.dh:.2f}")
 
         # -- Resource Monitoring --
         self.jtop_monitor = JTopMonitor()
@@ -199,7 +201,7 @@ class PipelineV2:
                 "video/x-raw, width=640, height=640, format=BGRx ! "
                 "videoconvert ! "
                 "video/x-raw, format=BGR ! "
-                "appsink drop=true sync=false"
+                "appsink drop=false sync=false"
             )
         return pipeline
 

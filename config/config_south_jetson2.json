@@ -1,6 +1,6 @@
 {
-    "video": "south_video.avi",
-    "output": "JETSON_Test2",
+    "video": "test.mp4",
+    "output": "gstreamer",
     "tracker": {
         "type": "ocsort",
         "max_age": 30,
