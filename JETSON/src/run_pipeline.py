@@ -5,6 +5,7 @@ import sys
 # Setup path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from trt_pipeline.tools import get_logger
+from pipeline import PipelineV2
 
 logger = get_logger("RunPipeline")
 
@@ -94,27 +95,37 @@ def main():
     logger.info(f"Using config file: {config_path}")
     logger.info(f"Using engine file: {engine_path}")
 
-    if args.pipeline_version == 1:
-        from pipeline import Pipeline
-        pipeline = Pipeline(
-            config_path=config_path,
-            engine_path=engine_path,
-            save_crop=args.save_crop,
-            root_dir=root_dir,
-        )
-        pipeline.run()
-    elif args.pipeline_version == 2:
-        from pipelinev2 import PipelineV2
-        pipeline = PipelineV2(
-            config_path=config_path,
-            engine_path=engine_path,
-            save_crop=args.save_crop,
-            root_dir=root_dir,
-        )
-        pipeline.run()
-    else:
-        logger.error(f"Invalid pipeline version: {args.pipeline_version}. Must be 1 or 2.")
-        sys.exit(1)
+    
+    pipeline = PipelineV2(
+        config_path=config_path,
+        engine_path=engine_path,
+        save_crop=args.save_crop,
+        root_dir=root_dir,
+        pipeline_version=args.pipeline_version,
+    )
+    pipeline.run()
+
+    # if args.pipeline_version == 1:
+    #     from pipeline import Pipeline
+    #     pipeline = Pipeline(
+    #         config_path=config_path,
+    #         engine_path=engine_path,
+    #         save_crop=args.save_crop,
+    #         root_dir=root_dir,
+    #     )
+    #     pipeline.run()
+    # elif args.pipeline_version == 2:
+    #     from pipelinev2 import PipelineV2
+    #     pipeline = PipelineV2(
+    #         config_path=config_path,
+    #         engine_path=engine_path,
+    #         save_crop=args.save_crop,
+    #         root_dir=root_dir,
+    #     )
+    #     pipeline.run()
+    # else:
+    #     logger.error(f"Invalid pipeline version: {args.pipeline_version}. Must be 1 or 2.")
+    #     sys.exit(1)
 
 
 if __name__ == "__main__":

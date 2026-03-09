@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from algorithm.sort import Sort
 from algorithm.ocsort import OcSort
 from trt_pipeline.trt_model import TRTModel
-from trt_pipeline.video_stream import AsyncImageSaver
+from trt_pipeline.video_stream import AsyncImageSaver, VideoStream, letterbox
 from trt_pipeline.tools import (
     get_logger, cleanup, initial_config, initial_lane_data, to_original_coords,
     parse_zones, side_of_line, save_lane_data
@@ -20,7 +20,7 @@ from trt_pipeline.tools import (
 from JETSON.src.jtop_logging import JTopMonitor
 
 class PipelineV2:
-    def __init__(self, config_path: str, engine_path: str, save_crop: bool = False, root_dir: str = None):
+    def __init__(self, config_path: str, engine_path: str, save_crop: bool = False, root_dir: str = None, pipeline_version: int = 2):
         self.logger = get_logger("JetsonPipelineV2")
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.logger.info(f"Device: {self.device}")
@@ -29,7 +29,7 @@ class PipelineV2:
         self.save_crop = save_crop
         self.root_dir = root_dir
         self.engine_path = engine_path
-
+        self.pipeline_version = pipeline_version
         self.dict_class = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
         self.target_classes = set(self.dict_class.keys())
 
@@ -41,6 +41,7 @@ class PipelineV2:
         self.tracker = self._initial_tracker(self.config)
         self.tracking_zone = parse_zones(self.config["tracking"])
         self.lane_data = initial_lane_data(self.config.get("lanes", {}), self.dict_class)
+        self.frame_stride = self.config.get("skip", 1)
 
         # Model loading
         self.model = TRTModel(
@@ -260,6 +261,16 @@ class PipelineV2:
         
         return input_tensor, time.perf_counter() - t0
 
+    def _preprocess_frame_legacy(self, frame_bgr):
+        t0 = time.perf_counter()
+        img_rgb = cv.cvtColor(frame_bgr, cv.COLOR_BGR2RGB)
+        img_lb, ratio, (dw, dh) = letterbox(img_rgb, new_shape=(640, 640), auto=False)
+        img_chw = img_lb.transpose(2, 0, 1)
+        img_chw = np.ascontiguousarray(img_chw, dtype=np.float32) / 255.0
+        input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
+
+        return input_tensor, time.perf_counter() - t0
+
     def _postprocess_detections(self, outputs):
         """Extract and filter detections from model output."""
         t0 = time.perf_counter()
@@ -400,34 +411,56 @@ class PipelineV2:
         total_start = time.perf_counter()
         processed_frames = 0
 
-        gst_pipeline = self._get_gstreamer_pipeline()
-        cap = cv.VideoCapture(gst_pipeline, cv.CAP_GSTREAMER)
+        if self.pipeline_version == 1:
+            cap = VideoStream(
+                video_path=self.video_path,
+                skip=self.frame_stride,
+                queue_size=2,
+            )
+            self.logger.info("Using VideoStream (pipeline v1 mode)")
+        elif self.pipeline_version == 2:
+            gst_pipeline = self._get_gstreamer_pipeline()
+            cap = cv.VideoCapture(gst_pipeline, cv.CAP_GSTREAMER)
+            if not cap.isOpened():
+                self.logger.error("Failed to open GStreamer pipeline. Falling back to standard OpenCV.")
+                cap = cv.VideoCapture(self.video_path)
+            
+            self.logger.info("Using GStreamer pipeline (pipeline v2 mode)")
 
-        if not cap.isOpened():
-            self.logger.error("Failed to open GStreamer pipeline. Falling back to standard OpenCV.")
-            cap = cv.VideoCapture(self.video_path)
-
-        total_start = time.perf_counter()
-        processed_frames = 0
         max_frames = int(self.fps * 3600) if self.fps > 0 else int(25 * 3600)
 
         try:
-            while cap.isOpened():
+            while True:
                 frame_start = time.perf_counter()
                 timings = {}
 
-                ret, frame_bgr = cap.read()
-                if not ret:
-                    self.logger.info("End of video stream")
-                    break
+                # Read frame based on pipeline version
+                if self.pipeline_version == 1:
+                    # VideoStream returns (frame_idx, frame) or None
+                    item = cap.read()
+                    if item is None:
+                        self.logger.info("End of video stream")
+                        break
+                    frame_idx, frame_bgr = item
+                else:
+                    # OpenCV capture returns (ret, frame)
+                    ret, frame_bgr = cap.read()
+                    if not ret:
+                        self.logger.info("End of video stream")
+                        break
+    
+                    # Frame skipping
+                    if processed_frames % self.skip != 0:
+                        processed_frames += 1
+                        continue
 
-                # Frame skipping
-                if processed_frames % self.skip != 0:
-                    processed_frames += 1
-                    continue
+                    frame_idx = processed_frames
 
                 # -- Preprocessing --
-                input_tensor, preprocess_time = self._preprocess_frame(frame_bgr)
+                if self.pipeline_version == 1:
+                    input_tensor, preprocess_time = self._preprocess_frame_legacy(frame_bgr)
+                else:
+                    input_tensor, preprocess_time = self._preprocess_frame(frame_bgr)
                 timings['preprocess'] = preprocess_time
 
                 # -- Inference --
@@ -444,7 +477,7 @@ class PipelineV2:
 
                 # -- Lane Crossing Detection --
                 lane_cross_time = self._process_lane_crossings(
-                    tracker_objects, frame_bgr, dets, frame_idx=processed_frames
+                    tracker_objects, frame_bgr, dets, frame_idx=frame_idx
                 )
                 timings['lane_crossing'] = lane_cross_time
 
@@ -452,18 +485,23 @@ class PipelineV2:
                 timings['timestamp'] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
                 # -- Logging --
-                self._log_timing_stats(processed_frames, timings['timestamp'], timings)
+                self._log_timing_stats(frame_idx, timings['timestamp'], timings)
 
-                if processed_frames % 50 == 0:
-                    avg_fps = processed_frames / (time.perf_counter() - total_start)
+                if frame_idx % 50 == 0:
+                    avg_fps = frame_idx / (time.perf_counter() - total_start)
                     self.logger.info(
-                        f"Frame: {processed_frames:5d} | "
+                        f"Frame: {frame_idx:5d} | "
                         f"FPS: {avg_fps:6.2f} | "
                         f"Frame Time: {timings['total_frame']*1000:6.2f}ms"
                     )
 
-                processed_frames += 1
-                if processed_frames > max_frames:
+                if self.pipeline_version == 2:
+                    processed_frames += 1
+                else:
+                    processed_frames = frame_idx
+                
+                if frame_idx >= max_frames:
+                    self.logger.info(f"Reached maximum frame limit: {max_frames}")
                     break
         except KeyboardInterrupt:
             self.logger.warning("Pipeline interrupted by user")
@@ -471,7 +509,10 @@ class PipelineV2:
             self.logger.error(f"Pipeline error: {e}", exc_info=True)
             raise
         finally:
-            cap.release()
+            if self.pipeline_version == 1:
+                pass
+            else:
+                cap.release()
             total_time = time.perf_counter() - total_start
             
             if self.image_saver:
