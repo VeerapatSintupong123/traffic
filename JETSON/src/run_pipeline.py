@@ -5,7 +5,7 @@ import sys
 # Setup path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from trt_pipeline.tools import get_logger
-from pipeline import PipelineV2
+from pipelinev2 import PipelineV2
 
 logger = get_logger("RunPipeline")
 
