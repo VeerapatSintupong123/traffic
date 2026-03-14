@@ -20,7 +20,7 @@ from trt_pipeline.tools import (
 from JETSON.src.jtop_logging import JTopMonitor
 
 class PipelineV2:
-    def __init__(self, config_path: str, engine_path: str, save_crop: bool = False, root_dir: str = None, pipeline_version: int = 2):
+    def __init__(self, config_name: str, engine_name: str, save_crop: bool = False, root_dir: str = None):
         self.logger = get_logger("JetsonPipelineV2")
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.logger.info(f"Device: {self.device}")
@@ -28,12 +28,43 @@ class PipelineV2:
         # -- Configuration --
         self.save_crop = save_crop
         self.root_dir = root_dir
-        self.engine_path = engine_path
-        self.pipeline_version = pipeline_version
         self.dict_class = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
         self.target_classes = set(self.dict_class.keys())
 
-        self.config = initial_config(config_path, root_dir=root_dir)
+        # -- Paths --
+        self.OUTPUT_DIR = os.path.join(self.root_dir, "output", self.output_name)
+        self.VIDEO_DIR = os.path.join(self.root_dir, "video")
+        self.MODEL_DIR = os.path.join(self.root_dir, "models")
+        self.CONFIG_DIR = os.path.join(self.root_dir, "config")
+        os.makedirs(self.VIDEO_DIR, exist_ok=True)
+        os.makedirs(self.OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.MODEL_DIR, exist_ok=True)
+        os.makedirs(self.CONFIG_DIR, exist_ok=True)
+
+        self.engine_path = os.path.join(self.MODEL_DIR, engine_name)
+        self.config_path = os.path.join(self.CONFIG_DIR, config_name)
+        if os.path.exists(self.config_path):
+            self.logger.info(f"Config file found: {self.config_path}")
+        else:
+            self.logger.error(f"Config file not found: {self.config_path}")
+            raise FileNotFoundError(f"Config file not found: {self.config_path}")
+        
+        if os.path.exists(self.engine_path):
+            self.logger.info(f"Engine file found: {self.engine_path}")
+        else:
+            self.logger.error(f"Engine file not found: {self.engine_path}")
+            raise FileNotFoundError(f"Engine file not found: {self.engine_path}")
+
+        self.config = initial_config(self.config_path, root_dir=root_dir)
+
+        self.setting = self.config.get("setting", None)
+        self.preprocessing_version = 1
+        self.inference_version = 1
+        self.model_version = 1
+        if self.setting:
+            self.preprocessing_version = self.setting.get("preprocessing", 1)
+            self.inference_version = self.setting.get("inference", 1)
+            self.model_version = self.setting.get("model", 1)
         self.video_name = self.config.get("video")
         self.output_name = self.config.get("output", "output")
         self.skip = max(1, int(self.config.get("skip", 1)))
@@ -45,16 +76,10 @@ class PipelineV2:
 
         # Model loading
         self.model = TRTModel(
-            engine_path=engine_path,
+            engine_path=self.engine_path,
             input_shape=(1, 3, 640, 640),
             device=self.device,
         )
-
-        # -- Paths --
-        self.VIDEO_DIR = os.path.join(self.root_dir, "video")
-        self.OUTPUT_DIR = os.path.join(self.root_dir, "output", self.output_name)
-        os.makedirs(self.VIDEO_DIR, exist_ok=True)
-        os.makedirs(self.OUTPUT_DIR, exist_ok=True)
 
         if 'rtsp://' in self.video_name:
             self.video_path = self.video_name
@@ -184,11 +209,35 @@ class PipelineV2:
         return int(dets[idx, 5])
 
     def _get_gstreamer_pipeline(self):
+        if self.preprocessing_version == 2:
+            if self.video_path.startswith("rtsp://"):
+                pipeline = (
+                    f"rtspsrc location=\"{self.video_path}\" latency=0 ! "
+                    "rtph264depay ! h264parse ! nvv4l2decoder ! "
+                    "nvvidconv ! videoscale add-borders=true ! "
+                    "video/x-raw, width=640, height=640, format=BGRx ! "
+                    "videoconvert ! "
+                    "video/x-raw, format=BGR ! "
+                    "appsink drop=true sync=false"
+                )
+            else:
+                pipeline = (
+                    f"filesrc location=\"{self.video_path}\" ! "
+                    "qtdemux ! decodebin ! "
+                    "nvvidconv ! videoscale add-borders=true ! "
+                    "video/x-raw, width=640, height=640, format=BGRx ! "
+                    "videoconvert ! "
+                    "video/x-raw, format=BGR ! "
+                    "appsink drop=false sync=false"
+                )
+            return pipeline
+
+        # Default GStreamer variant for preprocessing version 3.
         if self.video_path.startswith("rtsp://"):
             pipeline = (
                 f"rtspsrc location=\"{self.video_path}\" latency=0 ! "
                 "rtph264depay ! h264parse ! nvv4l2decoder ! "
-                "nvvidconv ! videoscale add-borders=true !"
+                "nvvidconv ! dest-rect='<0, 140, 640, 640>' ! "
                 "video/x-raw, width=640, height=640, format=BGRx ! "
                 "videoconvert ! "
                 "video/x-raw, format=BGR ! "
@@ -197,12 +246,12 @@ class PipelineV2:
         else:
             pipeline = (
                 f"filesrc location=\"{self.video_path}\" ! "
-                "qtdemux ! decodebin ! "
-                "nvvidconv ! videoscale add-borders=true !"
+                "qtdemux ! h264parse ! nvv4l2decoder ! "  # Hardware Decoder
+                "nvvidconv dest-rect='<0, 140, 640, 640>' ! "              # Hardware Scaler/Converter
                 "video/x-raw, width=640, height=640, format=BGRx ! "
-                "videoconvert ! "
+                "videoconvert ! "                         # Fast conversion to BGR for OpenCV
                 "video/x-raw, format=BGR ! "
-                "appsink drop=false sync=false"
+                "appsink drop=false sync=false max-buffers=1"
             )
         return pipeline
 
@@ -230,33 +279,50 @@ class PipelineV2:
         self.image_saver.cleanup()
         save_lane_data(self.lane_data, os.path.join(self.config["output"], "lane_data.json"))
 
+    # --- Running Pipeline ---
     def _preprocess_frame(self, frame_bgr):
         """Preprocess frame: convert to CHW format and normalize."""
-        t0 = time.perf_counter()
+        t0 = time.perf_counter_ns()
         
         # HWC BGR -> CHW BGR
         img_chw = frame_bgr.transpose(2, 0, 1)
         img_chw = np.ascontiguousarray(img_chw, dtype=np.float32) / 255.0
         
-        # To tensor
-        input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
-        torch.cuda.synchronize(self.device)  # Ensure transfer complete
+        # Add batch dimension
+        img_chw = np.expand_dims(img_chw, axis=0)
         
-        return input_tensor, time.perf_counter() - t0
+        return img_chw, time.perf_counter_ns() - t0
 
     def _preprocess_frame_legacy(self, frame_bgr):
-        t0 = time.perf_counter()
+        t0 = time.perf_counter_ns()
         img_rgb = cv.cvtColor(frame_bgr, cv.COLOR_BGR2RGB)
         img_lb, ratio, (dw, dh) = letterbox(img_rgb, new_shape=(640, 640), auto=False)
         img_chw = img_lb.transpose(2, 0, 1)
         img_chw = np.ascontiguousarray(img_chw, dtype=np.float32) / 255.0
         input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
 
-        return input_tensor, time.perf_counter() - t0
+        return input_tensor, time.perf_counter_ns() - t0
+
+    def _inference_yolov7(self, input_tensor):
+        """Run inference on the model and return raw outputs."""
+        t0 = time.perf_counter_ns()
+        infer_result = self.model.infer(input_tensor)
+
+        # Support both return styles:
+        # - outputs only
+        # - (inference_time_seconds, outputs)
+        if isinstance(infer_result, tuple) and len(infer_result) == 2:
+            inference_time_s, outputs = infer_result
+            inference_time_ns = int(float(inference_time_s) * 1_000_000_000)
+        else:
+            outputs = infer_result
+            inference_time_ns = time.perf_counter_ns() - t0
+
+        return outputs, inference_time_ns
 
     def _postprocess_detections(self, outputs):
         """Extract and filter detections from model output."""
-        t0 = time.perf_counter()
+        t0 = time.perf_counter_ns()
         
         num = int(outputs["num_dets"][0])
         boxes = outputs["det_boxes"][0][:num].cpu().numpy()
@@ -268,11 +334,11 @@ class PipelineV2:
         if dets.size:
             dets = dets[np.isin(dets[:, 5].astype(int), list(self.target_classes))]
         
-        return dets, time.perf_counter() - t0
+        return dets, time.perf_counter_ns() - t0
 
     def _run_tracker(self, dets):
         """Update tracker with detections."""
-        t0 = time.perf_counter()
+        t0 = time.perf_counter_ns()
         
         boxes_only = dets[:, :4] if dets.size else np.empty((0, 4))
         
@@ -282,11 +348,11 @@ class PipelineV2:
         else:
             tracker_objects = self.tracker.update(boxes_only)
         
-        return tracker_objects, time.perf_counter() - t0
+        return tracker_objects, time.perf_counter_ns() - t0
 
     def _process_lane_crossings(self, tracker_objects, frame_bgr, dets, frame_idx):
         """Detect lane crossings and save cropped images."""
-        t0 = time.perf_counter()
+        t0 = time.perf_counter_ns()
         h, w = frame_bgr.shape[:2]
 
         for x1, y1, x2, y2, track_id in tracker_objects:
@@ -337,12 +403,28 @@ class PipelineV2:
                         )
                         self.image_saver.save(save_path, crop)
 
-        return time.perf_counter() - t0
+        return time.perf_counter_ns() - t0
 
-    def _log_timing_stats(self, frame_idx, timestamp, timings):
+    # --- Logging and Saving Results ---
+    def _log_timing_stats(self, frame_idx, timings):
         """Store frame timing statistics."""
-        stat = {"frame_idx": frame_idx, "timestamp": timestamp}
-        stat.update({k: v * 1000 for k, v in timings.items()})  # Convert to ms
+        stat = {"frame_idx": frame_idx}
+
+        duration_keys = {
+            "preprocess",
+            "inference",
+            "postprocess",
+            "tracking",
+            "lane_crossing",
+            "total_frame",
+        }
+
+        for key, value in timings.items():
+            if key in duration_keys:
+                stat[f"{key}_ms"] = value / 1_000_000.0
+            else:
+                stat[key] = value
+
         self.timing_stats["frames"].append(stat)
         return stat  
 
@@ -379,7 +461,7 @@ class PipelineV2:
             f.write(f"Total Frames: {processed_frames}\n")
             f.write(f"Total Time: {total_time:.2f}s\n")
             f.write(f"Average FPS: {fps:.2f}\n")
-            f.write(f"GStreamer Preprocessing: {'Enabled' if self.pipeline_version == 2 else 'Disabled'}\n")
+            f.write(f"GStreamer Preprocessing: {'Enabled' if self.preprocessing_version in (2, 3) else 'Disabled'}\n")
             f.write(f"Tracker Type: {type(self.tracker).__name__}\n")
             f.write(f"Frame Skip: {self.skip}\n")
             f.write(f"Model Engine: {os.path.basename(self.engine_path)}\n")
@@ -395,34 +477,36 @@ class PipelineV2:
 
         if self.jtop_monitor:
             self.jtop_monitor.start()
-        total_start = time.perf_counter()
+        total_start = time.perf_counter_ns()
         processed_frames = 0
 
-        if self.pipeline_version == 1:
+        if self.preprocessing_version == 1:
             cap = VideoStream(
                 video_path=self.video_path,
                 skip=self.frame_stride,
                 queue_size=2,
             )
-            self.logger.info("Using VideoStream (pipeline v1 mode)")
-        elif self.pipeline_version == 2:
+            self.logger.info("Using preprocessing v1 (legacy letterbox path)")
+        elif self.preprocessing_version in (2, 3):
             gst_pipeline = self._get_gstreamer_pipeline()
             cap = cv.VideoCapture(gst_pipeline, cv.CAP_GSTREAMER)
             if not cap.isOpened():
                 self.logger.error("Failed to open GStreamer pipeline. Falling back to standard OpenCV.")
                 cap = cv.VideoCapture(self.video_path)
             
-            self.logger.info("Using GStreamer pipeline (pipeline v2 mode)")
+            self.logger.info(f"Using GStreamer pipeline (preprocessing v{self.preprocessing_version} mode)")
+        else:
+            raise ValueError(f"Unsupported preprocessing version: {self.preprocessing_version}")
 
         max_frames = int(self.fps * 3600) if self.fps > 0 else int(25 * 3600)
 
         try:
             while True:
-                frame_start = time.perf_counter()
+                frame_start = time.perf_counter_ns()
                 timings = {}
 
                 # Read frame based on pipeline version
-                if self.pipeline_version == 1:
+                if self.preprocessing_version == 1:
                     # VideoStream returns (frame_idx, frame) or None
                     item = cap.read()
                     if item is None:
@@ -444,45 +528,55 @@ class PipelineV2:
                     frame_idx = processed_frames
 
                 # -- Preprocessing --
-                if self.pipeline_version == 1:
+                timestamp = time.time_ns()
+                if self.preprocessing_version == 1:
                     input_tensor, preprocess_time = self._preprocess_frame_legacy(frame_bgr)
                 else:
                     input_tensor, preprocess_time = self._preprocess_frame(frame_bgr)
+                timings['start_preprocess'] = timestamp
                 timings['preprocess'] = preprocess_time
 
                 # -- Inference --
-                infer_time, outputs = self.model.infer(input_tensor)
-                timings['inference'] = infer_time
+                timestamp = time.time_ns()
+                outputs, inference_time = self._inference_yolov7(input_tensor)
+                timings['start_inference'] = timestamp
+                timings['inference'] = inference_time
 
                 # -- Postprocessing --
+                timestamp = time.time_ns()
                 dets, postprocess_time = self._postprocess_detections(outputs)
+                timings['start_postprocess'] = timestamp
                 timings['postprocess'] = postprocess_time
 
                 # -- Tracking --
+                timestamp = time.time_ns()
                 tracker_objects, tracking_time = self._run_tracker(dets)
+                timings['start_tracking'] = timestamp
                 timings['tracking'] = tracking_time
 
                 # -- Lane Crossing Detection --
+                timestamp = time.time_ns()
                 lane_cross_time = self._process_lane_crossings(
                     tracker_objects, frame_bgr, dets, frame_idx=frame_idx
                 )
+                timings['start_lane_crossing'] = timestamp
                 timings['lane_crossing'] = lane_cross_time
 
-                timings['total_frame'] = time.perf_counter() - frame_start
-                timings['timestamp'] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                timings['total_frame'] = time.perf_counter_ns() - frame_start
 
                 # -- Logging --
-                self._log_timing_stats(frame_idx, timings['timestamp'], timings)
+                self._log_timing_stats(frame_idx, timings)
 
                 if frame_idx % 50 == 0:
-                    avg_fps = frame_idx / (time.perf_counter() - total_start)
+                    elapsed_s = (time.perf_counter_ns() - total_start) / 1_000_000_000
+                    avg_fps = frame_idx / elapsed_s if elapsed_s > 0 else 0.0
                     self.logger.info(
                         f"Frame: {frame_idx:5d} | "
                         f"FPS: {avg_fps:6.2f} | "
-                        f"Frame Time: {timings['total_frame']*1000:6.2f}ms"
+                        f"Frame Time: {timings['total_frame'] / 1_000_000:6.2f}ms"
                     )
 
-                if self.pipeline_version == 2:
+                if self.preprocessing_version in (2, 3):
                     processed_frames += 1
                 else:
                     processed_frames = frame_idx
@@ -496,11 +590,11 @@ class PipelineV2:
             self.logger.error(f"Pipeline error: {e}", exc_info=True)
             raise
         finally:
-            if self.pipeline_version == 1:
+            if self.preprocessing_version == 1:
                 pass
             else:
                 cap.release()
-            total_time = time.perf_counter() - total_start
+            total_time = (time.perf_counter_ns() - total_start) / 1_000_000_000
             
             if self.image_saver:
                 self.image_saver.stop()
@@ -515,4 +609,3 @@ class PipelineV2:
             self._save_results(total_time, processed_frames)
             if total_time > 0:
                 self.logger.info(f"Pipeline completed: {processed_frames} frames in {total_time:.2f}s ({processed_frames / total_time:.2f} FPS)")
-            
