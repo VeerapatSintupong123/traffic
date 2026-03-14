@@ -2,7 +2,7 @@
     "setting": {
         "model": "yolov7-tiny.engine",
         "preprocessing": 1,
-        "inference": 1
+        "inference": 2
     },
     "video": "test.mp4",
     "output": "i3",

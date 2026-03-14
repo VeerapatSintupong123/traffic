@@ -2,10 +2,10 @@
     "setting": {
         "model": "yolov7-tiny.engine",
         "preprocessing": 1,
-        "inference": 1
+        "inference": 2
     },
     "video": "test.mp4",
-    "output": "i4",
+    "output": "i3",
     "tracker": {
         "type": "ocsort",
         "max_age": 30,
