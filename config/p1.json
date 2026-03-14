@@ -1,6 +1,11 @@
 {
+    "setting": {
+        "model": "yolov7-tiny.engine",
+        "preprocessing": 1,
+        "inference": 1
+    },
     "video": "test.mp4",
-    "output": "gstreamer",
+    "output": "p1",
     "tracker": {
         "type": "ocsort",
         "max_age": 30,
