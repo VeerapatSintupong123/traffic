@@ -30,7 +30,6 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run Jetson TRT Pipeline with SORT")
     parser.add_argument("--config", required=True, help="Config filename (e.g., 'config_south_jetson2')")
-    parser.add_argument("--engine", default="yolov7-tiny.engine", help="Path to TensorRT engine")
     parser.add_argument("--save-crop", action="store_true", help="Save cropped images")
     args = parser.parse_args()
 
@@ -38,7 +37,6 @@ def main():
     
     pipeline = PipelineV2(
         config_name=args.config,
-        engine_name=args.engine,
         save_crop=args.save_crop,
         root_dir=root_dir,
     )
