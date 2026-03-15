@@ -9,6 +9,17 @@ from pipelinev2 import PipelineV2
 
 logger = get_logger("RunPipeline")
 
+def check_file_types(config_name, engine_name):
+    if not config_name.endswith(".json") or len(config_name.split(".json")[0]) == 0:
+        logger.error("Config file must be a .json file")
+        config_name = f"{config_name}.json"
+    
+    if not engine_name.endswith(".engine") or len(engine_name.split(".engine")[0]) == 0:
+        logger.error("Engine file must be a .engine file")
+        engine_name = f"{engine_name}.engine"
+
+    return config_name, engine_name
+
 def main():
     # Get script location and work backwards to find project root
     script_dir = os.path.dirname(os.path.abspath(__file__))  # JETSON/src
@@ -22,6 +33,8 @@ def main():
     parser.add_argument("--engine", default="yolov7-tiny.engine", help="Path to TensorRT engine")
     parser.add_argument("--save-crop", action="store_true", help="Save cropped images")
     args = parser.parse_args()
+
+    args.config, args.engine = check_file_types(args.config, args.engine)
     
     pipeline = PipelineV2(
         config_name=args.config,
