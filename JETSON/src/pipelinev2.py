@@ -32,12 +32,10 @@ class PipelineV2:
         self.target_classes = set(self.dict_class.keys())
 
         # -- Paths --
-        self.OUTPUT_DIR = os.path.join(self.root_dir, "output", self.output_name)
         self.VIDEO_DIR = os.path.join(self.root_dir, "video")
         self.MODEL_DIR = os.path.join(self.root_dir, "models")
         self.CONFIG_DIR = os.path.join(self.root_dir, "config")
         os.makedirs(self.VIDEO_DIR, exist_ok=True)
-        os.makedirs(self.OUTPUT_DIR, exist_ok=True)
         os.makedirs(self.MODEL_DIR, exist_ok=True)
         os.makedirs(self.CONFIG_DIR, exist_ok=True)
 
@@ -73,6 +71,9 @@ class PipelineV2:
         self.tracking_zone = parse_zones(self.config["tracking"])
         self.lane_data = initial_lane_data(self.config.get("lanes", {}), self.dict_class)
         self.frame_stride = self.config.get("skip", 1)
+
+        self.OUTPUT_DIR = os.path.join(self.root_dir, "output", self.output_name)
+        os.makedirs(self.OUTPUT_DIR, exist_ok=True)
 
         # Model loading
         self.model = TRTModel(

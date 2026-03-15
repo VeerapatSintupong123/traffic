@@ -22,11 +22,10 @@ class JTopMonitor:
         if self.monitoring:
             stats = jetson.stats
             log_entry = {
-                'time': str(stats.get('time')),
+                'timestamp': str(stats.get('time')),
                 'gpu': stats.get('GPU'),
                 'ram': stats.get('RAM'),
                 'swap': stats.get('SWAP'),
-                'iram': stats.get('IRAM'),
                 'CPU1': stats.get('CPU1'),
                 'CPU2': stats.get('CPU2'),
                 'CPU3': stats.get('CPU3'),
