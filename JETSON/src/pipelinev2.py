@@ -1,6 +1,6 @@
 import os
 import sys
-from time import perf_counter_ns
+import time
 import numpy as np
 import torch
 import cv2 as cv
@@ -283,7 +283,7 @@ class PipelineV2:
     # --- Running Pipeline ---
     def _preprocess_frame(self, frame_bgr):
         """Preprocess frame: convert to CHW format and normalize."""
-        t0 = perf_counter_ns()
+        t0 = time.perf_counter()
         
         # HWC BGR -> CHW BGR
         img_chw = frame_bgr.transpose(2, 0, 1)
@@ -292,38 +292,37 @@ class PipelineV2:
         # Add batch dimension
         img_chw = np.expand_dims(img_chw, axis=0)
         
-        return img_chw, perf_counter_ns() - t0
+        return img_chw, time.perf_counter() - t0
 
     def _preprocess_frame_legacy(self, frame_bgr):
-        t0 = perf_counter_ns()
+        t0 = time.perf_counter()
         img_rgb = cv.cvtColor(frame_bgr, cv.COLOR_BGR2RGB)
         img_lb, ratio, (dw, dh) = letterbox(img_rgb, new_shape=(640, 640), auto=False)
         img_chw = img_lb.transpose(2, 0, 1)
         img_chw = np.ascontiguousarray(img_chw, dtype=np.float32) / 255.0
         input_tensor = torch.from_numpy(img_chw).unsqueeze(0).to(self.device)
 
-        return input_tensor, perf_counter_ns() - t0
+        return input_tensor, time.perf_counter() - t0
 
     def _inference_yolov7(self, input_tensor):
         """Run inference on the model and return raw outputs."""
-        t0 = perf_counter_ns()
+        t0 = time.perf_counter()
         infer_result = self.model.infer(input_tensor)
 
         # Support both return styles:
         # - outputs only
         # - (inference_time_seconds, outputs)
         if isinstance(infer_result, tuple) and len(infer_result) == 2:
-            inference_time_s, outputs = infer_result
-            inference_time_ns = int(float(inference_time_s) * 1_000_000_000)
+            inference_time, outputs = infer_result
         else:
             outputs = infer_result
-            inference_time_ns = perf_counter_ns() - t0
+            inference_time = time.perf_counter() - t0
 
-        return outputs, inference_time_ns
+        return outputs, inference_time
 
     def _postprocess_detections(self, outputs):
         """Extract and filter detections from model output."""
-        t0 = perf_counter_ns()
+        t0 = time.perf_counter()
         
         num = int(outputs["num_dets"][0])
         boxes = outputs["det_boxes"][0][:num].cpu().numpy()
@@ -335,11 +334,11 @@ class PipelineV2:
         if dets.size:
             dets = dets[np.isin(dets[:, 5].astype(int), list(self.target_classes))]
         
-        return dets, perf_counter_ns() - t0
+        return dets, time.perf_counter() - t0
 
     def _run_tracker(self, dets):
         """Update tracker with detections."""
-        t0 = perf_counter_ns()
+        t0 = time.perf_counter()
         
         boxes_only = dets[:, :4] if dets.size else np.empty((0, 4))
         
@@ -349,11 +348,11 @@ class PipelineV2:
         else:
             tracker_objects = self.tracker.update(boxes_only)
         
-        return tracker_objects, perf_counter_ns() - t0
+        return tracker_objects, time.perf_counter() - t0
 
     def _process_lane_crossings(self, tracker_objects, frame_bgr, dets, frame_idx):
         """Detect lane crossings and save cropped images."""
-        t0 = perf_counter_ns()
+        t0 = time.perf_counter()
         h, w = frame_bgr.shape[:2]
 
         for x1, y1, x2, y2, track_id in tracker_objects:
@@ -404,7 +403,7 @@ class PipelineV2:
                         )
                         self.image_saver.save(save_path, crop)
 
-        return perf_counter_ns() - t0
+        return time.perf_counter() - t0
 
     # --- Logging and Saving Results ---
     def _log_timing_stats(self, frame_idx, timings):
@@ -422,7 +421,7 @@ class PipelineV2:
 
         for key, value in timings.items():
             if key in duration_keys:
-                stat[f"{key}_ms"] = value / 1_000_000.0
+                stat[f"{key}_ms"] = value * 1000
             else:
                 stat[key] = value
 
@@ -478,7 +477,7 @@ class PipelineV2:
 
         if self.jtop_monitor:
             self.jtop_monitor.start()
-        total_start = perf_counter_ns()
+        total_start = time.perf_counter()
         processed_frames = 0
 
         if self.preprocessing_version == 1:
@@ -503,7 +502,7 @@ class PipelineV2:
 
         try:
             while True:
-                frame_start = perf_counter_ns()
+                frame_start = time.perf_counter()
                 timings = {}
 
                 # Read frame based on pipeline version
@@ -528,8 +527,8 @@ class PipelineV2:
 
                     frame_idx = processed_frames
 
-                # -- Preprocessing --
-                timestamp = time.time_ns()
+        # -- Preprocessing --
+                timestamp = time.time()
                 if self.preprocessing_version == 1:
                     input_tensor, preprocess_time = self._preprocess_frame_legacy(frame_bgr)
                 else:
@@ -538,43 +537,43 @@ class PipelineV2:
                 timings['preprocess'] = preprocess_time
 
                 # -- Inference --
-                timestamp = time.time_ns()
+                timestamp = time.time()
                 outputs, inference_time = self._inference_yolov7(input_tensor)
                 timings['start_inference'] = timestamp
                 timings['inference'] = inference_time
 
                 # -- Postprocessing --
-                timestamp = time.time_ns()
+                timestamp = time.time()
                 dets, postprocess_time = self._postprocess_detections(outputs)
                 timings['start_postprocess'] = timestamp
                 timings['postprocess'] = postprocess_time
 
                 # -- Tracking --
-                timestamp = time.time_ns()
+                timestamp = time.time()
                 tracker_objects, tracking_time = self._run_tracker(dets)
                 timings['start_tracking'] = timestamp
                 timings['tracking'] = tracking_time
 
                 # -- Lane Crossing Detection --
-                timestamp = time.time_ns()
+                timestamp = time.time()
                 lane_cross_time = self._process_lane_crossings(
                     tracker_objects, frame_bgr, dets, frame_idx=frame_idx
                 )
                 timings['start_lane_crossing'] = timestamp
                 timings['lane_crossing'] = lane_cross_time
 
-                timings['total_frame'] = perf_counter_ns() - frame_start
+                timings['total_frame'] = time.perf_counter() - frame_start
 
                 # -- Logging --
                 self._log_timing_stats(frame_idx, timings)
 
                 if frame_idx % 50 == 0:
-                    elapsed_s = (perf_counter_ns() - total_start) / 1_000_000_000
+                    elapsed_s = time.perf_counter() - total_start
                     avg_fps = frame_idx / elapsed_s if elapsed_s > 0 else 0.0
                     self.logger.info(
                         f"Frame: {frame_idx:5d} | "
                         f"FPS: {avg_fps:6.2f} | "
-                        f"Frame Time: {timings['total_frame'] / 1_000_000:6.2f}ms"
+                        f"Frame Time: {timings['total_frame'] * 1000:6.2f}ms"
                     )
 
                 if self.preprocessing_version in (2, 3):
@@ -595,7 +594,7 @@ class PipelineV2:
                 pass
             else:
                 cap.release()
-            total_time = (perf_counter_ns() - total_start) / 1_000_000_000
+            total_time = time.perf_counter() - total_start
             
             if self.image_saver:
                 self.image_saver.stop()
