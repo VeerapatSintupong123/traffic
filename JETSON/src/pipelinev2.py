@@ -316,7 +316,7 @@ class PipelineV2:
 
         return outputs, inference_time
 
-    def _postprocess_newer_yolo(self, prediction, conf_threshold=0.25, iou_threshold=0.45):
+    def _postprocess_yolo_trt(self, prediction, conf_threshold=0.25, iou_threshold=0.45):
         """
         Post-processing for YOLOv8n, YOLOv11n raw TensorRT output (1, 84, 8400)
         Optimized for Jetson with OpenCV 4.8.0
@@ -591,16 +591,20 @@ class PipelineV2:
                 timings['start_inference'] = timestamp
                 timings['inference'] = inference_time
 
-                # -- Postprocessing --
+                # -- Post-processing --
                 timestamp = time.time()
                 if self.inference_version == 1:
-                    dets, postprocess_time = self._postprocess_detections(outputs)
+                    dets, postprocess_time = self._postprocess_yolov7(outputs)
                 elif self.inference_version == 2:
-                    dets, postprocess_time = self._postprocess_newer_yolo(outputs)
+                    dets, postprocess_time = self._postprocess_yolo_trt(outputs['output0'])
                 else:
-                    raise ValueError(f"Unsupported inference version: {self.inference_version}")
+                    dets, postprocess_time = self._postprocess_yolov7(outputs)
                 timings['start_postprocess'] = timestamp
-                timings['postprocess'] = postprocess_time
+                timings["postprocess"] = postprocess_time
+                
+                # Filter dets based on target classes
+                if dets.size:
+                    dets = dets[np.isin(dets[:, 5].astype(int), list(self.target_classes))]
 
                 # -- Tracking --
                 timestamp = time.time()
