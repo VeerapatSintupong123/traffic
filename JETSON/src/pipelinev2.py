@@ -292,7 +292,7 @@ class PipelineV2:
         # Add batch dimension
         img_chw = np.expand_dims(img_chw, axis=0)
         
-        return img_chw, time.perf_counter() - t0
+        return torch.from_numpy(img_chw).to(self.device), time.perf_counter() - t0
 
     def _preprocess_frame_legacy(self, frame_bgr):
         t0 = time.perf_counter()
