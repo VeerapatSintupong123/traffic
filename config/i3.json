@@ -1,6 +1,6 @@
 {
     "setting": {
-        "model": "yolov7-tiny.engine",
+        "model": "yolov8n.engine",
         "preprocessing": 1,
         "inference": 2
     },
