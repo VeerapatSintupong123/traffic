@@ -323,6 +323,10 @@ class PipelineV2:
         """
         t0 = time.perf_counter()
         
+        # Ensure prediction is on CPU and is a numpy array
+        if isinstance(prediction, torch.Tensor):
+            prediction = prediction.cpu().numpy()
+
         prediction = np.squeeze(prediction) # (84, 8400)
         
         # Get boxes and scores
