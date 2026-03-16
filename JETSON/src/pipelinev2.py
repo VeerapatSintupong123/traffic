@@ -306,21 +306,70 @@ class PipelineV2:
 
     def _inference_yolov7(self, input_tensor):
         """Run inference on the model and return raw outputs."""
-        t0 = time.perf_counter()
-        infer_result = self.model.infer(input_tensor)
-
-        # Support both return styles:
-        # - outputs only
-        # - (inference_time_seconds, outputs)
-        if isinstance(infer_result, tuple) and len(infer_result) == 2:
-            inference_time, outputs = infer_result
-        else:
-            outputs = infer_result
-            inference_time = time.perf_counter() - t0
+        inference_time, outputs = self.model.infer(input_tensor)
 
         return outputs, inference_time
 
-    def _postprocess_detections(self, outputs):
+    def _inference_yolov8(self, input_tensor):
+        """Run inference for YOLOv8 model (if supported)."""
+        inference_time, outputs = self.model.infer(input_tensor)
+
+        return outputs, inference_time
+
+    def _postprocess_newer_yolo(self, prediction, conf_threshold=0.25, iou_threshold=0.45):
+        """
+        Post-processing for YOLOv8n, YOLOv11n raw TensorRT output (1, 84, 8400)
+        Optimized for Jetson with OpenCV 4.8.0
+        """
+        t0 = time.perf_counter()
+        
+        prediction = np.squeeze(prediction) # (84, 8400)
+        
+        # Get boxes and scores
+        boxes = prediction[:4, :].T  # (8400, 4)
+        scores = prediction[4:, :]  # (80, 8400)
+
+        # Get class with highest score
+        class_ids = np.argmax(scores, axis=0) # (8400,)
+        max_scores = np.max(scores, axis=0) # (8400,)
+
+        # Filter by confidence
+        mask = max_scores > conf_threshold
+        
+        boxes = boxes[mask]
+        max_scores = max_scores[mask]
+        class_ids = class_ids[mask]
+
+        if len(boxes) == 0:
+            return np.empty((0, 6)), time.perf_counter() - t0
+
+        # Convert boxes from (cx, cy, w, h) to (x1, y1, x2, y2)
+        x, y, w, h = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        x1 = x - w / 2
+        y1 = y - h / 2
+        x2 = x + w / 2
+        y2 = y + h / 2
+        
+        boxes = np.stack([x1, y1, x2, y2], axis=1)
+
+        # NMS
+        indices = cv.dnn.NMSBoxes(boxes.tolist(), max_scores.tolist(), conf_threshold, iou_threshold)
+
+        if len(indices) == 0:
+            return np.empty((0, 6)), time.perf_counter() - t0
+            
+        indices = indices.flatten()
+        
+        # Combine into a single array
+        dets = np.concatenate([
+            boxes[indices],
+            max_scores[indices, np.newaxis],
+            class_ids[indices, np.newaxis]
+        ], axis=1)
+
+        return dets, time.perf_counter() - t0
+
+    def _postprocess_yolov7(self, outputs):
         """Extract and filter detections from model output."""
         t0 = time.perf_counter()
         
@@ -527,7 +576,7 @@ class PipelineV2:
 
                     frame_idx = processed_frames
 
-        # -- Preprocessing --
+                # -- Preprocessing --
                 timestamp = time.time()
                 if self.preprocessing_version == 1:
                     input_tensor, preprocess_time = self._preprocess_frame_legacy(frame_bgr)
@@ -544,7 +593,12 @@ class PipelineV2:
 
                 # -- Postprocessing --
                 timestamp = time.time()
-                dets, postprocess_time = self._postprocess_detections(outputs)
+                if self.inference_version == 1:
+                    dets, postprocess_time = self._postprocess_detections(outputs)
+                elif self.inference_version == 2:
+                    dets, postprocess_time = self._postprocess_newer_yolo(outputs)
+                else:
+                    raise ValueError(f"Unsupported inference version: {self.inference_version}")
                 timings['start_postprocess'] = timestamp
                 timings['postprocess'] = postprocess_time
 
