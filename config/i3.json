@@ -1,7 +1,7 @@
 {
     "setting": {
         "model": "yolov8n.engine",
-        "preprocessing": 1,
+        "preprocessing": 3,
         "inference": 2
     },
     "video": "test.mp4",

@@ -1,11 +1,11 @@
 {
     "setting": {
         "model": "yolo11n.engine",
-        "preprocessing": 1,
+        "preprocessing": 3,
         "inference": 2
     },
     "video": "test.mp4",
-    "output": "i3",
+    "output": "i4",
     "tracker": {
         "type": "ocsort",
         "max_age": 30,
